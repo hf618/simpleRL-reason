@@ -1,0 +1,15 @@
+bash train_grpo_math_tune_ray.sh \
+    --model_name Qwen2.5-3B --max_response_length 1280 \
+    --train_batch_size 48 \
+    --rollout_n 6 \
+    --val_batch_size 6 \
+    --ppo_mini_batch_size 24 \
+    --ppo_micro_batch_size 2 \
+    --log_prob_micro_batch_size 2 \
+    --micro_rollout_batch_size 2 \
+    --kl_loss_coef 0.001 \
+    --entropy_coeffient 0.001 \
+    --rollout_gpu_memory_util 0.70 \
+	--logger_config "['console','wandb']" \
+    --rollout_tp 2 --save_freq 20 --test_freq 5 --total_epochs 1 \
+    --exp_name "er_pyr_3"

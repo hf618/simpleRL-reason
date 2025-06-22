@@ -154,7 +154,7 @@ def hf_math_equal_subprocess(gold, target, timeout_seconds=10):
 
 import os 
 # TODO: Might have problem in multi node ray cluster !!!!
-reward_function_type = str(os.environ.get('REWORD_FUNCTION_TYPE', "mix"))
+reward_function_type = str(os.environ.get('REWORD_FUNCTION_TYPE', "independent"))
 format_penalty_value = float(os.environ.get('FORMAT_PENALTY_VALUE', "-1"))
 
 print(f"Reward function type: {reward_function_type}")
@@ -210,7 +210,7 @@ def compute_score(solution_str, ground_truth, method='strict'):
     else:
         raise ValueError(f"Invalid reward function type: {reward_function_type}")
             
-
+    # breakpoint()
     if random.random() < 0.05:
         # for 5% of the cases, print; otherwise, print nothing to accelerate the process 
         print(f"\n[Model Response]\n{solution_str}")
@@ -218,9 +218,70 @@ def compute_score(solution_str, ground_truth, method='strict'):
         print(f"\n[Is Boxed Matched]\n{is_boxed_matched}")
         print(f"\n[Extracted Answer]\n{extract_answer}")
         print(f"\n[Reward Score]\n{box_match}")
+    
     return {"score": box_match, "correctness": correct}
 
 
+def compute_score_custom(solution_str, ground_truth, method='strict'):
+    """The scoring function for GSM8k.
+
+    Reference: Trung, Luong, et al. "Reft: Reasoning with reinforced fine-tuning." Proceedings of the 62nd Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers). 2024.
+
+    Args:
+        solution_str: the solution text
+        ground_truth: the ground truth
+        method: the method to extract the solution, choices are 'strict' and 'flexible'
+        format_score: the score for the format
+        score: the score for the correct answer
+    """
+    extract_answer, is_boxed_matched = extract_solution(solution_str=solution_str)
+    
+    
+    if "\\boxed" not in extract_answer:
+        boxed_answer = f"\\boxed{{{extract_answer}}}"
+    else:
+        boxed_answer = extract_answer
+    
+    if "\\boxed" not in ground_truth:
+        boxed_ground_truth = f"\\boxed{{{ground_truth}}}"
+    else:
+        boxed_ground_truth = ground_truth
+        
+    
+    # target = parse(boxed_answer)    
+    # gold = parse(boxed_ground_truth)
+    correct = hf_math_equal_subprocess(gold=boxed_ground_truth, target=boxed_answer)
+    
+    if reward_function_type == 'mix':
+        if correct:
+            box_match = 1.0
+        else:
+            # if not is_boxed_matched:
+            #     box_match = format_penalty_value
+            # else:
+            box_match = 0
+    elif reward_function_type == 'independent':
+        if correct and is_boxed_matched:
+            box_match = 1.0
+        elif correct and not is_boxed_matched:
+            box_match = 0.5
+        elif not correct and is_boxed_matched:
+            box_match = -0.5
+        else:
+            box_match = format_penalty_value
+    else:
+        raise ValueError(f"Invalid reward function type: {reward_function_type}")
+            
+    # breakpoint()
+    if random.random() < 0.05:
+        # for 5% of the cases, print; otherwise, print nothing to accelerate the process 
+        print(f"\n[Model Response]\n{solution_str}")
+        print(f"\n[Ground Truth]\n{ground_truth}")
+        print(f"\n[Is Boxed Matched]\n{is_boxed_matched}")
+        print(f"\n[Extracted Answer]\n{extract_answer}")
+        print(f"\n[Reward Score]\n{box_match}")
+    
+    return {"score": box_match, "correctness": correct}
 
 # def compute_accuracy(solution_str, ground_truth, method='strict'):
 #     """The scoring function for GSM8k.

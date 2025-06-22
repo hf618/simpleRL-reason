@@ -24,7 +24,19 @@ from typing import List, Union, Dict, Any
 class Tracking(object):
     supported_backend = ["wandb", "mlflow", "swanlab", "console"]
 
-    def __init__(self, project_name, experiment_name, default_backend: Union[str, List[str]] = 'console', config=None):
+    # def __init__(self, project_name, experiment_name, default_backend: Union[str, List[str]] = 'console', config=None):
+    #     if isinstance(default_backend, str):
+    #         default_backend = [default_backend]
+    #     for backend in default_backend:
+    #         if backend == 'tracking':
+    #             import warnings
+    #             warnings.warn("`tracking` logger is deprecated. use `wandb` instead.", DeprecationWarning)
+    #         else:
+    #             assert backend in self.supported_backend, f'{backend} is not supported'
+
+    #     self.logger = {}
+
+    def __init__(self, project_name, experiment_name, default_backend: Union[str, List[str]] = 'console', config=None, default_local_dir=None):
         if isinstance(default_backend, str):
             default_backend = [default_backend]
         for backend in default_backend:
@@ -35,10 +47,32 @@ class Tracking(object):
                 assert backend in self.supported_backend, f'{backend} is not supported'
 
         self.logger = {}
+        if 'tracking' in default_backend or 'wandb' in default_backend:
+            import os
+            import wandb
+
+            # 如果未提供 default_local_dir，则 fallback 到默认路径
+            if default_local_dir is None:
+                output_dir = "/home/hfd24/simpleRL-reason/custom/wandb"
+            else:
+                output_dir = os.path.join(default_local_dir, "")
+
+            os.makedirs(output_dir, exist_ok=True)
+            os.environ["WANDB_DIR"] = output_dir
+
+            wandb.init(
+                project=project_name,
+                name=experiment_name,
+                config=config,
+                mode="offline"
+            )
+            print("WandB log dir:", wandb.run.dir)
+            self.logger['wandb'] = wandb
 
         if 'tracking' in default_backend or 'wandb' in default_backend:
             import wandb
-            wandb.init(project=project_name, name=experiment_name, config=config)
+            wandb.init(project=project_name, name=experiment_name, config=config, mode='offline')
+            print("WandB log dir:", wandb.run.dir)
             self.logger['wandb'] = wandb
 
         if 'mlflow' in default_backend:

@@ -119,6 +119,7 @@ class Worker(Worker):
             is_driver_worker=is_driver_worker,
             prompt_adapter_config=prompt_adapter_config,
             multimodal_config=multimodal_config,
+            return_hidden_states=True,
             **speculative_args,
         )
 

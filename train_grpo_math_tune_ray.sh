@@ -2,30 +2,50 @@
 
 USER_ENV=`whoami`
 set -x
-export NCCL_DEBUG=DEBUG
+# export NCCL_DEBUG=DEBUG
 export RAY_BACKEND_LOG_LEVEL=debug
 export RAY_DEDUP_LOGS=1
 
 
-export PROJECT_NAME=verl_train
-export WANDB_API_KEY=TO_BE_FILLED
+export PROJECT_NAME=verl_train_gnode5
+export WANDB_API_KEY=8c84ddd422687515e5df25109f349a4f2c5df884
 export WANDB_OFFICIAL=1
 export VLLM_ATTENTION_BACKEND=XFORMERS
-export HDFS_DATA_PATH=TO_BE_FILLED
-export HDFS_MODEL_PATH=TO_BE_FILLED
-export HDFS_CHECKPOINT_PATH=TO_BE_FILLED
-export HDFS_LOG_PATH=TO_BE_FILLED
+export HDFS_DATA_PATH=/home/fdhuang/simpleRL-reason/custom/data
+export HDFS_MODEL_PATH=/home/fdhuang/Model/qwen
+export HDFS_CHECKPOINT_PATH=/home/fdhuang/simpleRL-reason/custom/checkpoint
+export HDFS_LOG_PATH=/home/fdhuang/simpleRL-reason/custom/log
 export RUN_NAME=verl-grpo
-export ARNOLD_WORKER_NUM=TO_BE_FILLED # number of nodes you want to use 
+export ARNOLD_WORKER_NUM=1 # number of nodes you want to use 
+
+export RAY_OVERRIDE_JOB_RUNTIME_ENV=1
+export CUDA_LAUNCH_BLOCKING=1  # 同步CUDA错误
+export NCCL_DEBUG=INFO          # 启用NCCL详细日志
+export NCCL_SOCKET_IFNAME=eno2np1 # 指定网卡（根据ifconfig替换）
+export LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/usr/local/cuda-12.6/lib64:$LD_LIBRARY_PATH
+# export LD_LIBRARY_PATH=$HOME/.local/lib:/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH
+export LD_PRELOAD=$HOME/.local/lib/libcuda.so
+export RAY_pickling_fallback="True"
+export PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python
+
+export RAY_DEBUG=legacy
+export REWORD_FUNCTION_TYPE="independent"
+# n这三个平凡更换
+export CUDA_VISIBLE_DEVICES="0,1,2,3"  # 只使用 GPU 0 和 1
+NUM_GPUS=4
+HEAD_PORT="35604" # 注意更换 23857
+
+WORKING_DIR="."
+HEAD_IP="192.168.1.105"
 
 
 # Default values
-TRAIN_BATCH_SIZE=256
-VAL_BATCH_SIZE=500
-MAX_PROMPT_LENGTH=1024
-MAX_RESPONSE_LENGTH=3072
+TRAIN_BATCH_SIZE=64
+VAL_BATCH_SIZE=32
+MAX_PROMPT_LENGTH=512
+MAX_RESPONSE_LENGTH=1024
 LEARNING_RATE=5e-7
-PPO_MINI_BATCH_SIZE=256
+PPO_MINI_BATCH_SIZE=16
 # per GPU
 PPO_MICRO_BATCH_SIZE=2
 CLIP_RATIO=0.2
@@ -33,11 +53,11 @@ KL_LOSS_COEF=0.001
 ENTROPY_COEFFIENT=0.001
 KL_LOSS_TYPE="low_var_kl"
 TEMPERATURE=1.0
-LOG_PROB_MICRO_BATCH_SIZE=160
+LOG_PROB_MICRO_BATCH_SIZE=4
 ROLLOUT_N=8
 KL_COEF=0.001
 TOTAL_EPOCHS=20
-DATASET_NAME=simplelr_math_35
+DATASET_NAME=simplelr_qwen_level3to5
 ROLLOUT_GPU_MEMORY_UTIL=0.6
 MODEL_NAME=Qwen2.5-Math-7B
 SAVE_FREQ=20
@@ -76,6 +96,8 @@ generate_suffix() {
       --model_name) suffix+="_$2"; model_provided=true; shift 2 ;;
       --remove_clip) suffix+="_remove_clip$2"; shift 2 ;;
       --suffix) input_suffix="$2"; suffix_provided=true; shift 2 ;;
+      --logger_config) LOGGER_CONFIG="$2"; shift 2 ;;
+      --exp_name) EXP_NAME="$2"; shift 2 ;;
       *) shift ;;
     esac
   done
@@ -101,6 +123,7 @@ echo "Arguments received: $@"
 SUFFIX=$(generate_suffix "$@")
 RUN_NAME="$RUN_NAME$SUFFIX"
 LOG_FILE_PATH="$HDFS_LOG_PATH/$RUN_NAME.log"
+EXP_NAME=${exp_name}
 
 # Parse named arguments
 while [[ "$#" -gt 0 ]]; do
@@ -132,6 +155,8 @@ while [[ "$#" -gt 0 ]]; do
     --remove_clip) REMOVE_CLIP="$2"; shift 2 ;;
     --remove_previous_ckpt) REMOVE_PREVIOUS_CKPT="$2"; shift 2 ;;
     --suffix) SUFFIX="$2"; shift 2 ;;
+    --logger_config) LOGGER_CONFIG="$2"; shift 2 ;;
+    --exp_name) EXP_NAME="$2"; shift 2 ;;
     *)
       echo "Unknown option: $1"
       exit 1
@@ -151,16 +176,11 @@ echo "Micro Rollout Batch Size: $MICRO_ROLLOUT_BATCH_SIZE"
 echo "KL Loss Coefficient: $KL_LOSS_COEF" 
 echo "KL Loss Type: $KL_LOSS_TYPE" 
 echo "Temperature: $TEMPERATURE" 
-echo "Rollout N: $ROLLOUT_N" 
-echo "KL Coefficient: $KL_COEF" 
-echo "Total Epochs: $TOTAL_EPOCHS"
-echo "Dataset Name: $DATASET_NAME"
-echo "Model Name: $MODEL_NAME"
-echo "Remove Clip: $REMOVE_CLIP"
+echo "Rollout N: $ROLLOUT_N"
 echo "Remove Previous Ckpt: $REMOVE_PREVIOUS_CKPT"
 echo "LOG FILE PATH: $LOG_FILE_PATH"
 
-max_num_batched_tokens=$(expr $MAX_PROMPT_LENGTH + $MAX_RESPONSE_LENGTH + 1000)
+max_num_batched_tokens=$(expr $MAX_PROMPT_LENGTH + $MAX_RESPONSE_LENGTH + 100)
 echo -e "Training with the following parameters:\nTrain Batch Size: $TRAIN_BATCH_SIZE\nVal Batch Size: $VAL_BATCH_SIZE\nMax Prompt Length: $MAX_PROMPT_LENGTH\nMax Response Length: $MAX_RESPONSE_LENGTH\nLearning Rate: $LEARNING_RATE\nPPO Mini Batch Size: $PPO_MINI_BATCH_SIZE\nPPO Micro Batch Size: $PPO_MICRO_BATCH_SIZE\nKL Loss Coefficient: $KL_LOSS_COEF\nKL Loss Type: $KL_LOSS_TYPE\nTemperature: $TEMPERATURE\nRollout N: $ROLLOUT_N\nKL Coefficient: $KL_COEF\nTotal Epochs: $TOTAL_EPOCHS\nDataset Name: $DATASET_NAME\nModel Name: $MODEL_NAME"
 
 
@@ -168,9 +188,24 @@ ray job submit --address=${HEAD_IP}:${HEAD_PORT} \
   --entrypoint-num-cpus=1 \
   --runtime-env-json='{
         "working_dir": "'${WORKING_DIR}'",
+        "excludes": [
+          "/.git/",                    
+          "/checkpoint/",
+          "/custom/checkpoint/",
+          "/custom/log/",
+          "/custom/data/",
+          "/home/fdhuang/simpleRL-reason/examples/simplelr_math_eval/data/tabmwp/test.jsonl"
+        ],
         "env_vars": {
           "http_proxy": "",
-          "https_proxy": ""
+          "https_proxy": "",
+          "WANDB_API_KEY": "8c84ddd422687515e5df25109f349a4f2c5df884",
+          "CUDA_LAUNCH_BLOCKING": "1",
+          "NCCL_DEBUG": "INFO",
+          "NCCL_SOCKET_IFNAME": "eno2np1",
+          "RAY_OVERRIDE_JOB_RUNTIME_ENV": "1",
+          "REWORD_FUNCTION_TYPE": "independent",
+          "RAY_DEBUG": "legacy"
         }
     }' \
   -- python -m verl.trainer.main_ppo \
@@ -192,11 +227,12 @@ ray job submit --address=${HEAD_IP}:${HEAD_PORT} \
   actor_rollout_ref.actor.clip_ratio=$CLIP_RATIO \
   actor_rollout_ref.actor.kl_loss_type=$KL_LOSS_TYPE \
   actor_rollout_ref.model.enable_gradient_checkpointing=True \
-  actor_rollout_ref.actor.fsdp_config.param_offload=False \
+  actor_rollout_ref.actor.fsdp_config.param_offload=False\
   actor_rollout_ref.actor.fsdp_config.grad_offload=False \
   actor_rollout_ref.actor.fsdp_config.optimizer_offload=False \
   actor_rollout_ref.rollout.temperature=$TEMPERATURE \
-  actor_rollout_ref.rollout.log_prob_micro_batch_size=$LOG_PROB_MICRO_BATCH_SIZE \
+  actor_rollout_ref.rollout.swap_space=2 \
+  actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=$LOG_PROB_MICRO_BATCH_SIZE \
   actor_rollout_ref.rollout.tensor_model_parallel_size=$ROLLOUT_TENSOR_MODEL_PARALLEL_SIZE \
   actor_rollout_ref.rollout.name=vllm \
   actor_rollout_ref.rollout.gpu_memory_utilization=$ROLLOUT_GPU_MEMORY_UTIL \
@@ -204,19 +240,20 @@ ray job submit --address=${HEAD_IP}:${HEAD_PORT} \
   actor_rollout_ref.rollout.enable_chunked_prefill=False \
   actor_rollout_ref.rollout.max_num_batched_tokens=$max_num_batched_tokens \
   actor_rollout_ref.rollout.micro_rollout_batch_size=$MICRO_ROLLOUT_BATCH_SIZE \
-  actor_rollout_ref.ref.log_prob_micro_batch_size=$LOG_PROB_MICRO_BATCH_SIZE \
+  actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=$LOG_PROB_MICRO_BATCH_SIZE \
   actor_rollout_ref.ref.fsdp_config.param_offload=True \
   algorithm.kl_ctrl.kl_coef=$KL_COEF \
-  critic.ppo_micro_batch_size_per_gpu=4 \
+  critic.ppo_micro_batch_size_per_gpu=$PPO_MICRO_BATCH_SIZE \
   trainer.critic_warmup=0 \
-  trainer.logger=['console','wandb'] \
+  trainer.logger=$LOGGER_CONFIG \
   trainer.project_name=$PROJECT_NAME \
   trainer.remove_previous_ckpt=$REMOVE_PREVIOUS_CKPT \
   trainer.experiment_name=$RUN_NAME \
-  trainer.n_gpus_per_node=8 \
+  trainer.n_gpus_per_node=$NUM_GPUS \
   trainer.nnodes=$ARNOLD_WORKER_NUM \
   trainer.remove_clip=$REMOVE_CLIP \
   trainer.save_freq=$SAVE_FREQ \
   trainer.test_freq=$TEST_FREQ \
-  trainer.default_local_dir=$HDFS_CHECKPOINT_PATH/$RUN_NAME \
-  trainer.total_epochs=$TOTAL_EPOCHS 2>&1 | tee -a $LOG_FILE_PATH
+  trainer.default_local_dir=$HDFS_CHECKPOINT_PATH/${RUN_NAME}_${EXP_NAME} \
+  trainer.total_epochs=$TOTAL_EPOCHS 2>&1 | tee -a $LOG_FILE_PATH \
+  actor_rollout_ref.rollout.dtype=bfloat16 

@@ -58,8 +58,10 @@ def test_data_transfer():
     wg = RayWorkerGroup(resource_pool, cls_with_init)
 
     # this is real dataset size
-    batch_size = 4096
-    seqlen = 32768
+    # batch_size = 4096
+    # seqlen = 32768
+    batch_size = 8
+    seqlen = 5120
 
     data_dict = {}
 

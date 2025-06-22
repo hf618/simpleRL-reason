@@ -50,6 +50,7 @@ def logprobs_from_logits(logits, labels):
     """
     See: https://github.com/pytorch/pytorch/issues/563#issuecomment-330103591
     """
+    FLAH_ATTN_CROSS_ENTROPY_LOSS_AVAILABLE = False
     if FLAH_ATTN_CROSS_ENTROPY_LOSS_AVAILABLE:
         batch_dim = logits.shape[:-1]
         last_dim = logits.shape[-1]
@@ -238,6 +239,40 @@ def pad_sequence_to_length(tensors, max_seq_len, pad_token_id, left_pad=False):
     pad_tuple = (max_seq_len - tensors.shape[-1], 0) if left_pad else (0, max_seq_len - tensors.shape[-1])
     return F.pad(tensors, pad_tuple, 'constant', pad_token_id)
 
+def pad_4d_tensor(tensors, max_seq_len, pad_token_id, left_pad=False):
+    """
+    更省内存的4D张量填充方案
+    输入形状: [batch, seq_len, dim1, dim2]
+    输出形状: [batch, max_seq_len, dim1, dim2]
+    """
+    batch_size, seq_len, dim1, dim2 = tensors.shape
+    if seq_len >= max_seq_len:
+        return tensors
+    
+    # 预分配目标张量（一次性分配所需内存）
+    padded_tensor = torch.full(
+        (batch_size, max_seq_len, dim1, dim2),
+        fill_value=pad_token_id,
+        dtype=tensors.dtype,
+        device=tensors.device  # 保持设备一致
+    )
+    
+    # 直接拷贝有效数据（避免填充操作的中间内存）
+    if left_pad:
+        padded_tensor[:, -seq_len:, :, :] = tensors  # 右对齐
+    else:
+        padded_tensor[:, :seq_len, :, :] = tensors   # 左对齐
+    
+    return padded_tensor
+
+from torch.nn.utils.rnn import PackedSequence
+
+def pad_to_packed(tensors, lengths):
+    """将变长序列转为PackedSequence对象（自动跳过填充）"""
+    return PackedSequence(
+        data=tensors.flatten(2),  # [batch, seq_len, dim1*dim2]
+        batch_sizes=lengths
+    )
 
 from transformers import PreTrainedTokenizer
 

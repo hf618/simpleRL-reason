@@ -38,6 +38,8 @@ from verl.utils.seqlen_balancing import get_seqlen_balanced_partitions, log_seql
 from verl.utils.checkpoint.checkpoint_manager import find_latest_ckpt_path
 from verl.utils.dataset.rl_dataset import RLHFDataset, collate_fn
 
+from torch.utils.data import Subset
+import torch
 WorkerType = Type[Worker]
 
 
@@ -164,12 +166,29 @@ def _compute_response_info(batch):
 
     prompt_length = prompt_mask.sum(-1).float()
     response_length = response_mask.sum(-1).float()  # (batch_size,)
-
-    return dict(
+    # breakpoint()
+    # Initialize base return dict
+    return_dict = dict(
         response_mask=response_mask,
         prompt_length=prompt_length,
         response_length=response_length,
     )
+
+    # Add correctness-based calculations if available
+    if 'correctness' in batch.batch:
+        correctness = batch.batch['correctness'].bool()  # Convert to boolean mask
+        
+        # Calculate lengths for correct and incorrect responses
+        response_length_correct = response_length[correctness]
+        response_length_incorrect = response_length[~correctness]
+        
+        # Add to return dict
+        return_dict.update({
+            'response_length_correct': response_length_correct,
+            'response_length_incorrect': response_length_incorrect,
+        })
+
+    return return_dict
     
     
 def compute_response_metrics(batch):
@@ -178,21 +197,61 @@ def compute_response_metrics(batch):
     response_length = response_info['response_length']
     
     metrics = {
-        # response length
-        'response_length/mean':
-            torch.mean(response_length).detach().item(),
-        'response_length/max':
-            torch.max(response_length).detach().item(),
-        'response_length/min':
-            torch.min(response_length).detach().item(),
-        'response_length/clip_ratio':
-            torch.mean(torch.eq(response_length, max_response_length).float()).detach().item(),
+        # response length metrics (always available)
+        'response_length/overall/mean': torch.mean(response_length).detach().item(),
+        'response_length/overall/max': torch.max(response_length).detach().item(),
+        'response_length/overall/min': torch.min(response_length).detach().item(),
+        'response_length/overall/clip_ratio': torch.mean(
+            torch.eq(response_length, max_response_length).float()
+        ).detach().item(),
     }
-    return metrics  
+    
+    # Handle correct responses
+    if 'response_length_correct' in response_info:
+        response_length_correct = response_info['response_length_correct']
+        if len(response_length_correct) > 0:
+            metrics.update({
+                'response_length/correct/mean': torch.mean(response_length_correct).detach().item(),
+                'response_length/correct/max': torch.max(response_length_correct).detach().item(),
+                'response_length/correct/min': torch.min(response_length_correct).detach().item(),
+                'response_length/correct/clip_ratio': torch.mean(
+                    torch.eq(response_length_correct, max_response_length).float()
+                ).detach().item(),
+            })
+        else:
+            metrics.update({
+                'response_length/correct/mean': 0.0,
+                'response_length/correct/max': 0.0,
+                'response_length/correct/min': 0.0,
+                'response_length/correct/clip_ratio': 0.0,
+            })
+    
+    # Handle incorrect responses
+    if 'response_length_incorrect' in response_info:
+        response_length_incorrect = response_info['response_length_incorrect']
+        if len(response_length_incorrect) > 0:
+            metrics.update({
+                'response_length/incorrect/mean': torch.mean(response_length_incorrect).detach().item(),
+                'response_length/incorrect/max': torch.max(response_length_incorrect).detach().item(),
+                'response_length/incorrect/min': torch.min(response_length_incorrect).detach().item(),
+                'response_length/incorrect/clip_ratio': torch.mean(
+                    torch.eq(response_length_incorrect, max_response_length).float()
+                ).detach().item(),
+            })
+        else:
+            metrics.update({
+                'response_length/incorrect/mean': 0.0,
+                'response_length/incorrect/max': 0.0,
+                'response_length/incorrect/min': 0.0,
+                'response_length/incorrect/clip_ratio': 0.0,
+            })
+    
+    return metrics
 
 
 def compute_data_metrics(batch, use_critic=True):
     # TODO: add response length
+    sequence_score_0 = batch.batch['token_level_scores_0'].sum(-1)
     sequence_score = batch.batch['token_level_scores'].sum(-1)
     sequence_reward = batch.batch['token_level_rewards'].sum(-1)
 
@@ -220,6 +279,13 @@ def compute_data_metrics(batch, use_critic=True):
         return_var = torch.var(valid_returns)
 
     metrics = {
+        # score 0
+        'critic/score_0/mean':
+            torch.mean(sequence_score_0).detach().item(),
+        'critic/score_0/max':
+            torch.max(sequence_score_0).detach().item(),
+        'critic/score_0/min':
+            torch.min(sequence_score_0).detach().item(),
         # score
         'critic/score/mean':
             torch.mean(sequence_score).detach().item(),
@@ -303,6 +369,107 @@ def compute_timing_metrics(batch, timing_raw):
     }
 
 
+
+def compute_calculator_metrics(results, correctness_tensor, mid_vs=None):
+    stats_dict = {}
+
+    # 确保 correctness_tensor 是一个 tensor
+    if not isinstance(correctness_tensor, torch.Tensor):
+        correctness_tensor = torch.tensor(correctness_tensor)
+
+    # 将 correctness_tensor 转换为 boolean 索引
+    correct_indices = correctness_tensor == 1 # 假设 1 表示正确
+    incorrect_indices = correctness_tensor != 1 # 假设其他值表示错误
+
+    #
+    if mid_vs:
+        for key, value in mid_vs.items():
+            stats_dict[f"cal/base_v/{key}"] = value
+
+    # 计算正确和错误的样本数量
+    stats_dict["cal/num_correct"] = correct_indices.sum().item()
+    stats_dict["cal/num_incorrect"] = incorrect_indices.sum().item()
+
+    # 可选：计算正确率
+    total_samples = len(correctness_tensor)
+    if total_samples > 0:
+        stats_dict["cal/accuracy"] = stats_dict["cal/num_correct"] / total_samples
+
+
+    for layer_key, indicators in results.items():
+        for indicator_name, values in indicators.items():
+            # 确保 values 是 torch.Tensor
+            if not isinstance(values, torch.Tensor):
+                values = torch.tensor(values)
+
+            # 总体统计量
+            stats_dict[f"cal/overall/layer_{layer_key}/{indicator_name}/max"] = torch.max(values).item()
+            stats_dict[f"cal/overall/layer_{layer_key}/{indicator_name}/min"] = torch.min(values).item()
+            stats_dict[f"cal/overall/layer_{layer_key}/{indicator_name}/mean"] = torch.mean(values).item()
+
+            # 正确样本统计量
+            correct_values = values[correct_indices]
+            if correct_values.numel() > 0: # 检查是否有正确样本
+                stats_dict[f"cal/correct/layer_{layer_key}/{indicator_name}/max"] = torch.max(correct_values).item()
+                stats_dict[f"cal/correct/layer_{layer_key}/{indicator_name}/min"] = torch.min(correct_values).item()
+                stats_dict[f"cal/correct/layer_{layer_key}/{indicator_name}/mean"] = torch.mean(correct_values).item()
+            else:
+                # 如果没有正确样本，可以设置为 NaN 或其他标记
+                stats_dict[f"cal/correct/layer_{layer_key}/{indicator_name}/max"] = 0.0
+                stats_dict[f"cal/correct/layer_{layer_key}/{indicator_name}/min"] = 0.0
+                stats_dict[f"cal/correct/layer_{layer_key}/{indicator_name}/mean"] = 0.0
+
+            # 错误样本统计量
+            incorrect_values = values[incorrect_indices]
+            if incorrect_values.numel() > 0: # 检查是否有错误样本
+                stats_dict[f"cal/incorrect/layer_{layer_key}/{indicator_name}/max"] = torch.max(incorrect_values).item()
+                stats_dict[f"cal/incorrect/layer_{layer_key}/{indicator_name}/min"] = torch.min(incorrect_values).item()
+                stats_dict[f"cal/incorrect/layer_{layer_key}/{indicator_name}/mean"] = torch.mean(incorrect_values).item()
+            else:
+                # 如果没有错误样本，可以设置为 NaN 或其他标记
+                stats_dict[f"cal/incorrect/layer_{layer_key}/{indicator_name}/max"] = 0.0
+                stats_dict[f"cal/incorrect/layer_{layer_key}/{indicator_name}/min"] = 0.0
+                stats_dict[f"cal/incorrect/layer_{layer_key}/{indicator_name}/mean"] = 0.0
+
+    
+
+    return stats_dict
+def concatenate_results(calculater_lst):
+    """
+    Concatenate multiple results dictionaries along the batch dimension.
+    
+    Args:
+        calculater_lst: List of results dictionaries, each with structure:
+            {
+                "1": {
+                    "Response Entropy": tensor([...]),  # shape [batch_size]
+                    "Effective Rank": tensor([...]),
+                    "Curvature": tensor([...])
+                },
+                "2": { ... }
+            }
+            
+    Returns:
+        A single concatenated dictionary with the same structure but concatenated tensors
+    """
+    if not calculater_lst:
+        return {}
+    
+    # Get all layer keys and metric keys from the first result
+    layer_keys = calculater_lst[0].keys()
+    metric_keys = calculater_lst[0][next(iter(layer_keys))].keys()
+    
+    concatenated = {}
+    
+    for layer in layer_keys:
+        concatenated[layer] = {}
+        for metric in metric_keys:
+            # Concatenate all tensors for this layer and metric across batches
+            tensors = [res[layer][metric] for res in calculater_lst]
+            concatenated[layer][metric] = torch.cat(tensors, dim=0)
+    
+    return concatenated
+
 @contextmanager
 def _timer(name: str, timing_raw: Dict[str, float]):
     with Timer(name=name, logger=None) as timer:
@@ -324,7 +491,8 @@ class RayPPOTrainer(object):
                  resource_pool_manager: ResourcePoolManager,
                  ray_worker_group_cls: RayWorkerGroup = RayWorkerGroup,
                  reward_fn=None,
-                 val_reward_fn=None):
+                 val_reward_fn=None,
+                 calculator=None):
 
         # assert torch.cuda.is_available(), 'cuda must be available on driver'
 
@@ -332,6 +500,7 @@ class RayPPOTrainer(object):
         self.config = config
         self.reward_fn = reward_fn
         self.val_reward_fn = val_reward_fn
+        self.calculator = calculator
 
         self.hybrid_engine = config.actor_rollout_ref.hybrid_engine
         assert self.hybrid_engine, 'Currently, only support hybrid engine'
@@ -484,6 +653,15 @@ class RayPPOTrainer(object):
                                          shuffle=True,
                                          drop_last=True,
                                          collate_fn=collate_fn)
+        # sampled_indices = np.random.choice(len(self.val_dataset), size=10, replace=False)
+        # sampled_dataset = Subset(self.val_dataset, sampled_indices)
+        # self.val_dataloader = DataLoader(
+        #     dataset=sampled_dataset,
+        #     batch_size=len(sampled_dataset),  # 或更小的 batch_size
+        #     shuffle=False,  # 已随机采样，无需再 shuffle
+        #     drop_last=False,
+        #     collate_fn=collate_fn
+        # )
 
         assert len(self.train_dataloader) >= 1
         assert len(self.val_dataloader) >= 1
@@ -508,8 +686,11 @@ class RayPPOTrainer(object):
     def _validate(self):
         correctness_lst = []
         reward_tensor_lst = []
+        reward_tensor_0_lst = []
         data_source_lst = []
+        calculater_lst = []
         for test_data in self.val_dataloader:
+            
             test_batch = DataProto.from_single_dict(test_data)
             # test_batch = test_batch.to('cuda')
 
@@ -525,47 +706,160 @@ class RayPPOTrainer(object):
                 'do_sample': False,
                 'validate': True,
             }
-
+            
             # pad to be divisible by dp_size
             test_gen_batch_padded, pad_size = pad_dataproto_to_divisor(test_gen_batch, self.actor_rollout_wg.world_size)
+            
             test_output_gen_batch_padded = self.actor_rollout_wg.generate_sequences(test_gen_batch_padded)
+            # breakpoint()
             # unpad
             test_output_gen_batch = unpad_dataproto(test_output_gen_batch_padded, pad_size=pad_size)
             print('validation generation end')
 
             test_batch = test_batch.union(test_output_gen_batch)
 
+            prompt_len = test_batch.batch['prompts'].shape[1]  # 例如 512
+            response_attention_mask = test_batch.batch['attention_mask'][:, prompt_len:]
+            lens_tensor = response_attention_mask.sum(dim=-1)  # [10] - sum of non-padding tokens for each sample
+            test_batch.batch['calculator_results'] = self.calculator(
+                hidden_states=test_batch.batch['hidden_states'],  # [10, 2048, 2, 896]
+                attention_mask=response_attention_mask,  # [10, 2048]
+                compute_diff=True, 
+                diff_stride=20
+            )
+            calculater_lst.append(test_batch.batch['calculator_results'])
+            
+            # Add these near where other lists are initialized
+            length_lst = []
+
+            # Inside the loop, after calculating lens_tensor:
+            length_lst.append(lens_tensor.cpu())
+            
+
             # evaluate using reward_function
             # for certain reward function (e.g. sandbox), the generation can overlap with reward
-            reward_tensor_dict = self.val_reward_fn(test_batch)
+            reward_tensor_dict = self.val_reward_fn(test_batch, is_val=True)
             
+            reward_tensor_0 = reward_tensor_dict['reward_tensor_0'] 
             reward_tensor = reward_tensor_dict['reward_tensor'] 
             correctness = reward_tensor_dict['correctness_tensor']
             
+            reward_tensor_0_lst.append(reward_tensor_0)
             reward_tensor_lst.append(reward_tensor)
             correctness_lst.append(correctness)
             data_source_lst.append(test_batch.non_tensor_batch.get('data_source', ['unknown'] * reward_tensor.shape[0]))
 
+            
+
+            
+        reward_tensor_0 = torch.cat(reward_tensor_0_lst, dim=0).sum(-1).cpu()  # (batch_size,)
         reward_tensor = torch.cat(reward_tensor_lst, dim=0).sum(-1).cpu()  # (batch_size,)
         correctness_tensor = torch.cat(correctness_lst, dim=0).cpu()
         data_sources = np.concatenate(data_source_lst, axis=0)
+        calculator_cat = concatenate_results(calculater_lst)
+        length_tensor = torch.cat(length_lst, dim=0).cpu()  # (total_batch_size,)
         # evaluate test_score based on data source
+        data_source_reward_0 = {}
         data_source_reward = {}
         data_source_correctness = {}
+
+        data_source_calculator_overall = {}
+        # 新增：用于存储正确和错误回答的 calculator 指标
+        data_source_calculator_correct = {}
+        data_source_calculator_incorrect = {}
+
+
+        # Add these near where other data_source dictionaries are initialized
+        data_source_length = {}
+
         for i in range(reward_tensor.shape[0]):
             data_source = data_sources[i]
+            is_correct = correctness_tensor[i].item() # 获取当前样本的正确性标签
+
             if data_source not in data_source_reward:
+                data_source_reward_0[data_source] = []
                 data_source_reward[data_source] = []
                 data_source_correctness[data_source] = []
+                # 初始化总体、正确和错误回答的 calculator 字典
+                data_source_calculator_overall[data_source] = {} # 恢复初始化总体字典
+                data_source_calculator_correct[data_source] = {}
+                data_source_calculator_incorrect[data_source] = {}
+                
+                data_source_length[data_source] = []
+            
+
+            data_source_reward_0[data_source].append(reward_tensor_0[i].item())
             data_source_reward[data_source].append(reward_tensor[i].item())
-            data_source_correctness[data_source].append(correctness_tensor[i].item())
+            data_source_correctness[data_source].append(is_correct)
+            data_source_length[data_source].append(length_tensor[i].item())
+
+            for layer, layer_calculator in calculator_cat.items():
+                # 恢复：将总体指标添加到列表中
+                if layer not in data_source_calculator_overall[data_source]:
+                    data_source_calculator_overall[data_source][layer] = {}
+                if layer not in data_source_calculator_correct[data_source]:
+                    data_source_calculator_correct[data_source][layer] = {}
+                    data_source_calculator_incorrect[data_source][layer] = {}
+
+                for indicator, value_tensor in layer_calculator.items():
+                    # 恢复：将总体指标添加到列表中
+                    if indicator not in data_source_calculator_overall[data_source][layer]:
+                         data_source_calculator_overall[data_source][layer][indicator] = []
+                    if indicator not in data_source_calculator_correct[data_source][layer]:
+                        data_source_calculator_correct[data_source][layer][indicator] = []
+                        data_source_calculator_incorrect[data_source][layer][indicator] = []
+
+                    # 恢复：将总体指标值添加到列表中
+                    data_source_calculator_overall[data_source][layer][indicator].append(value_tensor[i].item())
+
+                    # 根据正确性标签将指标值添加到相应的列表中
+                    if is_correct == 1: # 假设 1 表示正确
+                        data_source_calculator_correct[data_source][layer][indicator].append(value_tensor[i].item())
+                    else: # 假设其他值表示错误
+                        data_source_calculator_incorrect[data_source][layer][indicator].append(value_tensor[i].item())
+
 
         metric_dict = {}
+
+
         for data_source, rewards in data_source_reward.items():
             metric_dict[f'val/test_score/{data_source}'] = np.mean(rewards)
+        
+        for data_source, rewards in data_source_reward_0.items():
+            metric_dict[f'val/test_score_0/{data_source}'] = np.mean(rewards)
 
         for data_source, correctnesses in data_source_correctness.items():
             metric_dict[f'val/test_correctness/{data_source}'] = np.mean(correctnesses)
+
+        # === 新增代码开始 ===
+        def fill_metrics(prefix, calc_dict):
+            """通用指标填充函数"""
+            for ds_name, ds_data in calc_dict.items():
+                for layer, layer_data in ds_data.items():
+                    for metric, values in layer_data.items():
+                        key = f"val/{prefix}/{ds_name}/layer_{layer}/{metric}"
+                        if len(values) > 0:
+                            metric_dict[key] = np.nanmean(values) if np.isnan(values).any() else np.mean(values)
+                        else:
+                            metric_dict[key] = 0.0
+
+        fill_metrics("cal_correct", data_source_calculator_correct)
+        fill_metrics("cal_incorrect", data_source_calculator_incorrect)
+        fill_metrics("cal_overall", data_source_calculator_overall)
+
+
+        # Add these with the other metric calculations
+        for data_source, lengths in data_source_length.items():
+            metric_dict[f'val/test_overall_len/{data_source}'] = np.mean(lengths)
+            # Calculate correct/incorrect lengths by filtering with correctness
+            correct_lengths = [length for length, correct in zip(lengths, data_source_correctness[data_source]) if correct == 1]
+            incorrect_lengths = [length for length, correct in zip(lengths, data_source_correctness[data_source]) if correct == 0]
+            
+            metric_dict[f'val/test_correct_len/{data_source}'] = np.mean(correct_lengths) if correct_lengths else 0.0
+            metric_dict[f'val/test_incorrect_len/{data_source}'] = np.mean(incorrect_lengths) if incorrect_lengths else 0.0
+
+        
+        del test_batch.batch['hidden_states'], test_batch.batch['calculator_results']
 
         return metric_dict
 
@@ -781,18 +1075,41 @@ class RayPPOTrainer(object):
         from verl.utils.tracking import Tracking
         from omegaconf import OmegaConf
 
+        # logger = Tracking(project_name=self.config.trainer.project_name,
+        #                   experiment_name=self.config.trainer.experiment_name,
+        #                   default_backend=self.config.trainer.logger,
+        #                   config=OmegaConf.to_container(self.config, resolve=True))
+
+        import os
+
+        # 获取 checkpoint 路径
+        checkpoint_dir = self.config.trainer.default_local_dir
+        experiment_name = self.config.trainer.experiment_name
+
+        # 构造 wandb 日志路径：只到 wandb 一级目录
+        wandb_log_dir = os.path.join(checkpoint_dir, 'wandb')
+
+        # 创建目录
+        os.makedirs(wandb_log_dir, exist_ok=True)
+
+        # 设置环境变量，告诉 wandb 把日志写入这里
+        os.environ["WANDB_DIR"] = wandb_log_dir
+
+        # 初始化 logger
         logger = Tracking(project_name=self.config.trainer.project_name,
-                          experiment_name=self.config.trainer.experiment_name,
-                          default_backend=self.config.trainer.logger,
-                          config=OmegaConf.to_container(self.config, resolve=True))
+                        experiment_name=self.config.trainer.experiment_name,
+                        default_backend=self.config.trainer.logger,
+                        config=OmegaConf.to_container(self.config, resolve=True),
+                        default_local_dir=self.config.trainer.default_local_dir)  # 👈 增加参数
 
         self.global_steps = 0
 
         # load checkpoint before doing anything
         self._load_checkpoint()
 
-        # perform validation before training
+        # perform validation before training 这儿记住打开 ****************************************
         # currently, we only support validation using the reward_function.
+
         if self.val_reward_fn is not None and self.config.trainer.get('val_before_train', True):
             val_metrics = self._validate()
             pprint(f'Initial validation metrics: {val_metrics}')
@@ -802,9 +1119,10 @@ class RayPPOTrainer(object):
 
         # we start from step 1
         self.global_steps += 1
-
+        metrics_old = {}
         for epoch in range(self.config.trainer.total_epochs):
             for batch_dict in self.train_dataloader:
+                
                 metrics = {}
                 timing_raw = {}
 
@@ -817,9 +1135,8 @@ class RayPPOTrainer(object):
                     # generate a batch
                     with _timer('gen', timing_raw):
                         gen_batch_output = self.actor_rollout_wg.generate_sequences(gen_batch)
-
-                    batch.non_tensor_batch['uid'] = np.array([str(uuid.uuid4()) for _ in range(len(batch.batch))],
-                                                             dtype=object)
+                    
+                    batch.non_tensor_batch['uid'] = np.array([str(uuid.uuid4()) for _ in range(len(batch.batch))], dtype=object)
                     # repeat to align with repeated responses in rollout
                     batch = batch.repeat(repeat_times=self.config.actor_rollout_ref.rollout.n, interleave=True)
                     batch = batch.union(gen_batch_output)
@@ -861,8 +1178,24 @@ class RayPPOTrainer(object):
                         if mask:
                             adjusted_attention_mask[i, -max_len:] = 0  # 将响应部分掩码置零
                     
-                    metrics.update(compute_response_metrics(batch=batch))
+                    # metrics.update(compute_response_metrics(batch=batch))
+
+                    # 更新指标
+                    prompt_len = batch.batch['prompts'].shape[1]  # 例如 512
+                    response_attention_mask = batch.batch['attention_mask'][:, prompt_len:]
+                    batch.batch['calculator_results'] = self.calculator(
+                        hidden_states=batch.batch['hidden_states'],  # [10, 2048, 2, 896]
+                        attention_mask=response_attention_mask,  # [10, 2048]
+                        compute_diff=True, 
+                        diff_stride=20
+                    )
+                    del batch.batch['hidden_states']
+
                     
+                    # 立即回收内存
+                    # del batch.batch['hidden_states']
+                    
+                    # breakpoint()
                     if self.config.trainer.remove_clip:
                         batch.batch['attention_mask'] = adjusted_attention_mask
 
@@ -908,8 +1241,9 @@ class RayPPOTrainer(object):
                             batch = batch.union(reward_tensor)
 
                         # we combine with rule-based rm
-                        reward_tensor_dict: dict = self.reward_fn(batch)
+                        reward_tensor_dict: dict = self.reward_fn(batch, is_val=False, metrics_old=metrics_old)  # 这儿加了一个
                         # batch.batch['token_level_scores'] = reward_tensor
+                        batch.batch['token_level_scores_0'] = reward_tensor_dict['reward_tensor_0']
                         batch.batch['token_level_scores'] = reward_tensor_dict['reward_tensor']
                         batch.batch['correctness'] = reward_tensor_dict['correctness_tensor']
 
@@ -921,13 +1255,18 @@ class RayPPOTrainer(object):
                             metrics.update(kl_metrics)
                         else:
                             batch.batch['token_level_rewards'] = batch.batch['token_level_scores']
-
+                        
                         # compute advantages, executed on the driver process
                         batch = compute_advantage(batch,
                                                   adv_estimator=self.config.algorithm.adv_estimator,
                                                   gamma=self.config.algorithm.gamma,
                                                   lam=self.config.algorithm.lam,
                                                   num_repeat=self.config.actor_rollout_ref.rollout.n)
+                    
+                    metrics.update(compute_response_metrics(batch=batch))
+                    metrics.update(compute_calculator_metrics(batch.batch['calculator_results'], batch.batch['correctness'], self.reward_fn.mids))
+                    del batch.batch['calculator_results']
+
 
                     # update critic
                     if self.use_critic:
@@ -939,6 +1278,7 @@ class RayPPOTrainer(object):
                     # implement critic warmup
                     if self.config.trainer.critic_warmup <= self.global_steps:
                         # update actor
+                        # breakpoint()
                         with _timer('update_actor', timing_raw):
                             actor_output = self.actor_rollout_wg.update_actor(batch)
                         actor_output_metrics = reduce_metrics(actor_output.meta_info['metrics'])
@@ -964,6 +1304,9 @@ class RayPPOTrainer(object):
                 logger.log(data=metrics, step=self.global_steps)
 
                 self.global_steps += 1
+                # breakpoint()
+
+                metrics_old = metrics.copy()
 
                 if self.global_steps >= self.total_training_steps:
 

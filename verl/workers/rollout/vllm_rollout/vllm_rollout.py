@@ -33,7 +33,7 @@ from tensordict import TensorDict
 from torch import nn
 
 from verl import DataProto
-from verl.utils.torch_functional import get_eos_mask, pad_sequence_to_length
+from verl.utils.torch_functional import get_eos_mask, pad_sequence_to_length, pad_4d_tensor, pad_to_packed
 from verl.workers.rollout.base import BaseRollout
 from verl.third_party.vllm import LLM, vllm_version
 from verl.third_party.vllm import parallel_state as vllm_ps
@@ -133,13 +133,12 @@ class vLLMRollout(BaseRollout):
                 kwargs['stop_token_ids'] = [151645, 151643, 872,77091, 1474, 71703, 151644, 8948]
                 if "math" in config.model_path.lower():
                     kwargs['stop_token_ids'] = [151645, 151643, 872, 77091, 1474, 71703, 151644, 8948, 73594]
-                    
+            elif "3b" in config.model_path.lower():
+                kwargs['stop_token_ids'] = [14582, 16141, 31198] # Question, Answer, Problem      
             elif "1.5b" in config.model_path.lower():
                 kwargs['stop_token_ids'] = [14582, 16141, 31198] # Question, Answer, Problem
             elif "0.5b" in config.model_path.lower():
                 kwargs['stop_token_ids'] = [14582, 16141, 31198] # Question, Answer, Problem
-        else:
-            raise NotImplementedError(f"Stop token ids for model path '{config.model_path}' are not implemented")
                 
         # supporting adding any sampling params from the config file
         for k in config.keys():
@@ -203,6 +202,7 @@ class vLLMRollout(BaseRollout):
         # breakpoint()
         responses_list = []
         log_probs_list = []
+        hidden_states_list = []
         # users can customize different sampling_params at different run
         with self.update_sampling_params(**kwargs):
             for i in range(0, batch_size, MICRO_ROLLOUT_BATCH_SIZE):
@@ -216,24 +216,30 @@ class vLLMRollout(BaseRollout):
                 # outputs.append(output)
                 responses_list.append(output[0])
                 log_probs_list.append(output[1])
+                hidden_states_list.append(output[2])
+        # breakpoint()
         # TODO(sgm): disable logprob when recompute_log_prob is enable
         # if n = 1: (bs, response_length) ; if n > 1: (bs * n, response_length)
         # response = torch.cat(responses, dim=0).to(idx.device)
         # log_probs = torch.cat(log_probs, dim=0).to(idx.device)
         new_responses_list = []
         new_log_probs_list = []
+        new_hidden_states_list = []
         for i in range(len(responses_list)):
             if responses_list[i].shape[1] < self.config.response_length:
                 response = pad_sequence_to_length(responses_list[i], self.config.response_length, self.pad_token_id)
-                log_probs = pad_sequence_to_length(log_probs_list[i], self.config.response_length, self.pad_token_id)
+                # log_probs = pad_sequence_to_length(log_probs_list[i], self.config.response_length, self.pad_token_id)
+                hidden_states = pad_4d_tensor(hidden_states_list[i], self.config.response_length, self.pad_token_id) # 这里我就改成0了
                 new_responses_list.append(response)
-                new_log_probs_list.append(log_probs)
+                # new_log_probs_list.append(log_probs)
+                new_hidden_states_list.append(hidden_states)
             else:
                 new_responses_list.append(responses_list[i])
-                new_log_probs_list.append(log_probs_list[i])
+                # new_log_probs_list.append(log_probs_list[i])
+                new_hidden_states_list.append(hidden_states_list[i])
         response = torch.cat(new_responses_list, dim=0).to(idx.device)
-        log_probs = torch.cat(new_log_probs_list, dim=0).to(idx.device)
-        
+        # log_probs = torch.cat(new_log_probs_list, dim=0).to(idx.device)
+        hidden_states = torch.cat(new_hidden_states_list, dim=0).to(idx.device)
         if self.config.n > 1 and do_sample:
             idx = idx.repeat_interleave(self.config.n, dim=0)
             attention_mask = attention_mask.repeat_interleave(self.config.n, dim=0)
@@ -262,12 +268,13 @@ class vLLMRollout(BaseRollout):
                 'input_ids': seq,  # here input_ids become the whole sentences
                 # 'old_log_probs': log_probs, # we will recompute old log prob with actor
                 'attention_mask': attention_mask,
-                'position_ids': position_ids
+                'position_ids': position_ids,
+                'hidden_states': hidden_states,
             },
             batch_size=batch_size)
 
         # free vllm cache engine
         if self.config.free_cache_engine:
             self.inference_engine.free_cache_engine()
-
+        # breakpoint()
         return DataProto(batch=batch)

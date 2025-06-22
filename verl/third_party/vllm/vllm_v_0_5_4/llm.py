@@ -63,10 +63,10 @@ class LLM(LLM):
         tensor_parallel_size: The number of GPUs to use for distributed
             execution with tensor parallelism.
         dtype: The data type for the model weights and activations. Currently,
-            we support `float32`, `float16`, and `bfloat16`. If `auto`, we use
+            we support `float32`, `bfloat16`, and `bfloat16`. If `auto`, we use
             the `torch_dtype` attribute specified in the model config file.
             However, if the `torch_dtype` in the config is `float32`, we will
-            use `float16` instead.
+            use `bfloat16` instead.
         quantization: The method used to quantize the model weights. Currently,
             we support "awq". If None, we assume the model weights are not
             quantized and use `dtype` to determine the data type of the weights.
@@ -163,7 +163,7 @@ class LLM(LLM):
     ) -> None:
         self.llm_engine.tokenizer = tokenizer
 
-    def _run_engine(self, *, use_tqdm: bool) -> List[Union[RequestOutput, EmbeddingRequestOutput]]:
+    def _run_engine(self, *, use_tqdm: bool) -> Tuple[List[Union[RequestOutput, EmbeddingRequestOutput]], List[torch.Tensor]]:
         # Initialize tqdm.
         if use_tqdm:
             num_requests = self.llm_engine.get_num_unfinished_requests()
@@ -193,12 +193,15 @@ class LLM(LLM):
                             pbar.postfix = (f"est. speed input: {in_spd:.2f} toks/s, "
                                             f"output: {out_spd:.2f} toks/s")
                         pbar.update(1)
+                # breakpoint()
+                
         if use_tqdm:
             pbar.close()
         # Sort the outputs by request ID.
         # This is necessary because some requests may be finished earlier than
         # its previous requests.
         outputs = sorted(outputs, key=lambda x: int(x.request_id))
+        # breakpoint()
         return self._post_process_outputs(outputs)
 
     # # NOTE(shengguangming): add for verl
@@ -211,9 +214,10 @@ class LLM(LLM):
     #     return token_ids
 
     # NOTE(shengguangming): add for verl
-    def _post_process_outputs(self, request_outputs: List[RequestOutput]) -> Tuple[torch.Tensor, torch.Tensor]:
+    def _post_process_outputs(self, request_outputs: List[RequestOutput]) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         output_token_ids = []
         logprobs = []
+        hidden_state_list = []
         for request_output in request_outputs:  # List[RequestOutput]
             outputs = request_output.outputs
             for output in outputs:  # List[CompletionOutput], usually len == 1
@@ -225,12 +229,18 @@ class LLM(LLM):
                     for logprobs_dict, id in zip(logprobs_dicts, output.token_ids):
                         logprob.append(logprobs_dict[id].logprob)
                     logprobs.append(torch.tensor(logprob))
-
+            for hidden_state in request_output.hidden_states:
+                hidden_state_list.append(hidden_state)
         pad_token_id = self.llm_engine.tokenizer.pad_token_id if self.llm_engine.tokenizer.pad_token_id is not None else self.llm_engine.tokenizer.eos_token_id
         output_token_ids = pad_sequence(output_token_ids, batch_first=True, padding_value=pad_token_id)
         if len(logprobs) > 0:
             logprobs = pad_sequence(logprobs, batch_first=True, padding_value=pad_token_id)
-        return output_token_ids, logprobs
+        
+        if len(hidden_state_list) > 0:
+           hidden_states = pad_sequence(hidden_state_list, batch_first=True, padding_value=pad_token_id)  # 原本 padding_value=pad_token_id 我现在换成 0
+        else:
+            hidden_states = None
+        return output_token_ids, logprobs, hidden_states
 
     def sync_model_weights(self, actor_weights: Dict[str, torch.Tensor], load_format: str) -> None:
         self.llm_engine.sync_model_weights(actor_weights=actor_weights, load_format=load_format)

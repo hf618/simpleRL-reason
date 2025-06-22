@@ -138,21 +138,22 @@ class ActorRolloutRefWorker(Worker):
                                                            self.ulysses_sequence_parallel_size)
             self.config.ref.log_prob_micro_batch_size_per_gpu = self.config.ref.log_prob_micro_batch_size
 
-    def _build_model_optimizer(self,
-                               model_path,
-                               fsdp_config,
-                               optim_config,
-                               override_model_config,
-                               use_remove_padding=False,
-                               enable_gradient_checkpointing=False,
-                               trust_remote_code=False,
-                               use_liger=False,
+    def _build_model_optimizer(self, 
+                               model_path, 
+                               fsdp_config, 
+                               optim_config, 
+                               override_model_config, 
+                               use_remove_padding=False, 
+                               enable_gradient_checkpointing=False, 
+                               trust_remote_code=False, 
+                               use_liger=False, 
                                role='actor'):
         from verl.utils.model import print_model_size, update_model_config, get_generation_config
         from verl.utils.torch_dtypes import PrecisionType
         from transformers import AutoModelForCausalLM, AutoConfig
         from torch.distributed.fsdp import FullyShardedDataParallel as FSDP, ShardingStrategy, MixedPrecision, CPUOffload
         from torch import optim
+        from peft import LoraConfig, get_peft_model, TaskType
 
         assert role in ['actor', 'ref']
 
@@ -166,6 +167,7 @@ class ActorRolloutRefWorker(Worker):
         torch_dtype = fsdp_config.get('model_dtype', None)
         if torch_dtype is None:
             torch_dtype = torch.float32 if self._is_actor else torch.bfloat16
+            # torch_dtype = torch.float32 if self._is_actor else torch.bfloat16
         else:
             torch_dtype = PrecisionType.to_dtype(torch_dtype)
 
@@ -200,12 +202,31 @@ class ActorRolloutRefWorker(Worker):
             actor_module = AutoModelForCausalLM.from_pretrained(pretrained_model_name_or_path=local_path,
                                                                 torch_dtype=torch_dtype,
                                                                 config=actor_model_config,
-                                                                attn_implementation='flash_attention_2',
+                                                                # attn_implementation='flash_attention_2',
+                                                                attn_implementation='eager',
                                                                 trust_remote_code=trust_remote_code)
             # Apply Liger kernel to the model if use_liger is set to True
             if use_liger:
                 from liger_kernel.transformers.monkey_patch import _apply_liger_kernel_to_instance
                 _apply_liger_kernel_to_instance(model=actor_module)
+
+            # Add LoRA if enabled
+            if role == 'actor' and self.config.actor.get('use_lora', False):
+                lora_config = LoraConfig(
+                    r=self.config.actor.get('lora_r', 8),
+                    lora_alpha=self.config.actor.get('lora_alpha', 32),
+                    lora_dropout=self.config.actor.get('lora_dropout', 0.05),
+                    bias="none",
+                    task_type=TaskType.CAUSAL_LM,
+                    target_modules=self.config.actor.get('lora_target_modules', ["q_proj", "v_proj"])
+                )
+                actor_module = get_peft_model(actor_module, lora_config)
+                # Freeze base model parameters
+                for name, param in actor_module.named_parameters():
+                    if 'lora_' not in name:
+                        param.requires_grad = False
+                if self.rank == 0:
+                    actor_module.print_trainable_parameters()
 
             # some parameters may not in torch_dtype. TODO(zhangchi.usc1992) remove this after we switch to fsdp2
             actor_module.to(torch_dtype)
@@ -223,10 +244,12 @@ class ActorRolloutRefWorker(Worker):
         mixed_precision_config = fsdp_config.get('mixed_precision', None)
         if mixed_precision_config is not None:
             param_dtype = PrecisionType.to_dtype(mixed_precision_config.get('param_dtype', 'bf16'))
+            # param_dtype = PrecisionType.to_dtype(mixed_precision_config.get('param_dtype', 'fp16'))
             reduce_dtype = PrecisionType.to_dtype(mixed_precision_config.get('reduce_dtype', 'fp32'))
             buffer_dtype = PrecisionType.to_dtype(mixed_precision_config.get('buffer_dtype', 'fp32'))
         else:
             param_dtype = torch.bfloat16
+            # param_dtype = torch.bfloat16
             reduce_dtype = torch.float32
             buffer_dtype = torch.float32
 
@@ -251,7 +274,7 @@ class ActorRolloutRefWorker(Worker):
             actor_module,
             cpu_offload=cpu_offload,
             param_init_fn=init_fn,
-            use_orig_params=False,
+            use_orig_params=self.config.actor.fsdp_config.get('use_orig_params', False),
             auto_wrap_policy=auto_wrap_policy,
             device_id=torch.cuda.current_device(),
             sharding_strategy=sharding_strategy,  # zero3
@@ -265,7 +288,12 @@ class ActorRolloutRefWorker(Worker):
         # TODO: add more optimizer args into config
         if role == 'actor':
             from verl.utils.torch_functional import get_constant_schedule_with_warmup
-            actor_optimizer = optim.AdamW(actor_module_fsdp.parameters(),
+            if self.config.actor.get('use_lora', False):
+                trainable_params = [p for n, p in actor_module_fsdp.named_parameters() if 'lora_' in n]
+            else:
+                trainable_params = actor_module_fsdp.parameters()
+
+            actor_optimizer = optim.AdamW(trainable_params,
                                           lr=optim_config.lr,
                                           betas=optim_config.get('betas', (0.9, 0.999)),
                                           weight_decay=optim_config.get('weight_decay', 1e-2))
@@ -666,9 +694,11 @@ class CriticWorker(Worker):
             setattr(critic_model_config, 'classifier_dropout', 0.)
             setattr(critic_model_config, 'hidden_dropout', '0')
             critic_module = AutoModelForTokenClassification.from_pretrained(pretrained_model_name_or_path=local_path,
-                                                                            torch_dtype=torch_dtype,
+                                                                            # torch_dtype=torch_dtype,
                                                                             config=critic_model_config,
-                                                                            attn_implementation='flash_attention_2',
+                                                                            # attn_implementation='flash_attention_2',
+                                                                            torch_dtype=torch.bfloat16,
+                                                                            attn_implementation='eager',
                                                                             trust_remote_code=trust_remote_code)
 
             # some parameters may not in torch_dtype
@@ -684,10 +714,12 @@ class CriticWorker(Worker):
         fsdp_config = self.config.model.fsdp_config
         mixed_precision_config = fsdp_config.get('mixed_precision', None)
         if mixed_precision_config is not None:
-            param_dtype = PrecisionType.to_dtype(mixed_precision_config.get('param_dtype', 'bf16'))
+            # param_dtype = PrecisionType.to_dtype(mixed_precision_config.get('param_dtype', 'bf16'))
+            param_dtype = PrecisionType.to_dtype(mixed_precision_config.get('param_dtype', 'fp16'))
             reduce_dtype = PrecisionType.to_dtype(mixed_precision_config.get('reduce_dtype', 'fp32'))
             buffer_dtype = PrecisionType.to_dtype(mixed_precision_config.get('buffer_dtype', 'fp32'))
         else:
+            # param_dtype = torch.bfloat16
             param_dtype = torch.bfloat16
             reduce_dtype = torch.float32
             buffer_dtype = torch.float32
@@ -704,6 +736,7 @@ class CriticWorker(Worker):
         # Note: We force turn off CPUOffload for critic because it causes incorrect results when using grad accumulation
         critic_module = FSDP(critic_module,
                              param_init_fn=init_fn,
+                             # use_orig_params=self.config.critic.model.fsdp_config.get('use_orig_params', False),
                              use_orig_params=False,
                              auto_wrap_policy=auto_wrap_policy,
                              device_id=torch.cuda.current_device(),
@@ -925,8 +958,10 @@ class RewardModelWorker(Worker):
             setattr(model_config, 'classifier_dropout', 0.)
             reward_module = AutoModelForTokenClassification.from_pretrained(pretrained_model_name_or_path=local_path,
                                                                             config=model_config,
+                                                                            # torch_dtype=torch.bfloat16,
+                                                                            # attn_implementation='flash_attention_2',
                                                                             torch_dtype=torch.bfloat16,
-                                                                            attn_implementation='flash_attention_2',
+                                                                            attn_implementation='eager',
                                                                             trust_remote_code=trust_remote_code)
             reward_module.to(torch.bfloat16)
         auto_wrap_policy = get_fsdp_wrap_policy(module=reward_module, config=self.config.model.fsdp_config)
@@ -937,6 +972,7 @@ class RewardModelWorker(Worker):
         reward_module = FSDP(
             reward_module,
             param_init_fn=init_fn,
+            # use_orig_params=self.config.reward_model.model.fsdp_config.get('use_orig_params', False),
             use_orig_params=False,
             auto_wrap_policy=auto_wrap_policy,
             device_id=torch.cuda.current_device(),

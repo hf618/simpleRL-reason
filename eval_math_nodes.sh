@@ -19,7 +19,7 @@ export NCCL_DEBUG=warn
 set -x
 
 export WANDB_OFFICIAL=1
-export WANDB_API_KEY=TO_BE_FILLED
+export WANDB_API_KEY=8c84ddd422687515e5df25109f349a4f2c5df884
 TOTAL_NODES=${ARNOLD_WORKER_NUM:-1}  # Default to 1 if not set
 CURRENT_NODE=${ARNOLD_ID:-0}  # Default to 0 if not set
 
@@ -32,6 +32,7 @@ output_dir="eval_results"
 overwrite=false
 n_sampling=1
 specific_steps=""
+visible_gpus=""
 while [[ $# -gt 0 ]]; do
     case $1 in
         --run_name)
@@ -90,6 +91,10 @@ while [[ $# -gt 0 ]]; do
             specific_steps="$2"
             shift 2
             ;;
+        --visible_gpus)
+            visible_gpus="$2"
+            shift 2
+            ;;
         *)
             echo "Unknown parameter: $1"
             exit 1
@@ -107,12 +112,13 @@ fi
 
 eval_script_path="sh/eval.sh"
 
-HDFS_HOME=TO_BE_FILLED
+HDFS_HOME=/home/fdhuang/simpleRL-reason/custom
 
-base_checkpoint_path="${HDFS_HOME}/checkpoints/${RUN_NAME}"
+base_checkpoint_path="${HDFS_HOME}/checkpoint/${RUN_NAME}"
 
 
-init_model_path="${HDFS_HOME}/base_models/${INIT_MODEL_PATH}"
+# init_model_path="${HDFS_HOME}/base_models/${INIT_MODEL_PATH}"
+init_model_path="/home/fdhuang/Model/qwen/${INIT_MODEL_PATH}"
 chmod +x sh/convert_and_evaluate_gpu_nodes.sh
 
 
@@ -221,7 +227,8 @@ if [ "$just_wandb" != "true" ]; then
     "$tmp_ckpt_file" \
     "$output_dir" \
     "$overwrite" \
-    "$n_sampling"
+    "$n_sampling" \
+    "$visible_gpus" 
 fi
 
 
@@ -229,7 +236,7 @@ fi
 python sh/collect_results.py \
     --base_dir "$base_checkpoint_path/$output_dir" \
     --model_name $init_model_path \
-    --wandb_project "verl_math_evaluate" \
+    --wandb_project "verl_math_eval_gnode5" \
     --wandb_api_key "${WANDB_API_KEY}" \
     --wandb_run_name $RUN_NAME \
     --temperature $temperature \
