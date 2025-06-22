@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 
 
 <div align="center">
@@ -241,3 +242,4 @@ We implement our reinforcement learning algorithm extending from [Verl](https://
 [![Star History Chart](https://api.star-history.com/svg?repos=hkust-nlp/simpleRL-reason&type=Date)](https://star-history.com/#hkust-nlp/simpleRL-reason&Date)
 
 
+=======
