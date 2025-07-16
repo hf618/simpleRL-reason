@@ -36,6 +36,12 @@ class Tracking(object):
 
     #     self.logger = {}
 
+        # if 'tracking' in default_backend or 'wandb' in default_backend:
+        #     import wandb
+        #     wandb.init(project=project_name, name=experiment_name, config=config,  mode="offline")
+        #     print("WandB log dir:", wandb.run.dir)
+        #     self.logger['wandb'] = wandb
+        # ===== 新增：构建 wandb 输出路径 =====
     def __init__(self, project_name, experiment_name, default_backend: Union[str, List[str]] = 'console', config=None, default_local_dir=None):
         if isinstance(default_backend, str):
             default_backend = [default_backend]
@@ -47,11 +53,33 @@ class Tracking(object):
                 assert backend in self.supported_backend, f'{backend} is not supported'
 
         self.logger = {}
+        # if 'tracking' in default_backend or 'wandb' in default_backend:
+        #     import os
+        #     import wandb
+
+        #     # 如果未提供 default_local_dir，则 fallback 到默认路径
+        #     if default_local_dir is None:
+        #         output_dir = "/home/hfd24/simpleRL-reason/custom/wandb"
+        #     else:
+        #         output_dir = os.path.join(default_local_dir, "")
+
+        #     os.makedirs(output_dir, exist_ok=True)
+        #     os.environ["WANDB_DIR"] = output_dir
+
+        #     wandb.init(
+        #         project=project_name,
+        #         name=experiment_name,
+        #         config=config,
+        #         mode="offline"
+        #     )
+        #     print("WandB log dir:", wandb.run.dir)
+        #     self.logger['wandb'] = wandb
+
         if 'tracking' in default_backend or 'wandb' in default_backend:
             import os
             import wandb
-
             # 如果未提供 default_local_dir，则 fallback 到默认路径
+
             if default_local_dir is None:
                 output_dir = "/home/hfd24/simpleRL-reason/custom/wandb"
             else:
@@ -112,6 +140,9 @@ class Tracking(object):
             self.logger['wandb'].finish(exit_code=0)
         if 'swanlab' in self.logger:
             self.logger['swanlab'].finish()
+
+
+
 
 
 class _MlflowLoggingAdapter:

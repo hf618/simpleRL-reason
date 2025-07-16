@@ -3,7 +3,7 @@ data:
   train_files: ~/data/rlhf/gsm8k/train.parquet
   val_files: ~/data/rlhf/gsm8k/test.parquet
   prompt_key: prompt
-  max_prompt_length: 512
+  max_prompt_length: 512 # 记得change
   max_response_length: 512
   train_batch_size: 1024
   val_batch_size: 1312
@@ -45,13 +45,13 @@ actor_rollout_ref:
       wrap_policy:
         # transformer_layer_cls_to_wrap: None
         min_num_params: 0
-      param_offload: False
-      grad_offload: False
-      optimizer_offload: False
+      param_offload: False # <-- 原本 False
+      grad_offload: False # <-- 原本 False
+      optimizer_offload: False # <-- 原本 False
       fsdp_size: -1
   ref:
     fsdp_config:
-      param_offload: False
+      param_offload: False # <-- 原本 False
       wrap_policy:
         # transformer_layer_cls_to_wrap: None
         min_num_params: 0
@@ -107,9 +107,9 @@ critic:
     enable_gradient_checkpointing: True
     use_remove_padding: False
     fsdp_config:
-      param_offload: False
-      grad_offload: False
-      optimizer_offload: False
+      param_offload: False # <-- 原本 False
+      grad_offload: False # <-- 原本 False
+      optimizer_offload: False # <-- 原本 False
       wrap_policy:
         # transformer_layer_cls_to_wrap: None
         min_num_params: 0
@@ -174,3 +174,20 @@ trainer:
   default_hdfs_dir: null
   default_local_dir: checkpoints/${trainer.project_name}/${trainer.experiment_name}
   remove_previous_ckpt: True
+  val_before_train: True   # Controla si se ejecuta la validación antes del entrenamiento
+  val_sample_size: -1      # Número de muestras a usar para la validación. -1 para usar el dataset completo.
+
+# <<< 新增部分开始 >>>
+# Configuration for the RewardManager
+reward_manager:
+  ema_alpha: 0.7
+  indicator_names: ['Response Entropy 1 diff 2', 'Response Entropy 1 diff', 'Response Entropy 1']
+  weights: [1.0, 0.25, 0.0625] # 1, 1/4, 1/16
+  weights_inner: [1.0, 0.01, 0.001] # 1.0, 1e-2, 1e-3
+  add_reward: True
+
+calculator:
+  # Stride para el cálculo de diferencias en las métricas de representación.
+  diff_stride: 20
+  enable: True
+  compute_log_effective_rank: False

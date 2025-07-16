@@ -154,7 +154,7 @@ def hf_math_equal_subprocess(gold, target, timeout_seconds=10):
 
 import os 
 # TODO: Might have problem in multi node ray cluster !!!!
-reward_function_type = str(os.environ.get('REWORD_FUNCTION_TYPE', "independent"))
+reward_function_type = str(os.environ.get('REWORD_FUNCTION_TYPE', "mix"))
 format_penalty_value = float(os.environ.get('FORMAT_PENALTY_VALUE', "-1"))
 
 print(f"Reward function type: {reward_function_type}")
@@ -210,7 +210,7 @@ def compute_score(solution_str, ground_truth, method='strict'):
     else:
         raise ValueError(f"Invalid reward function type: {reward_function_type}")
             
-    # breakpoint()
+
     if random.random() < 0.05:
         # for 5% of the cases, print; otherwise, print nothing to accelerate the process 
         print(f"\n[Model Response]\n{solution_str}")
@@ -272,7 +272,7 @@ def compute_score_custom(solution_str, ground_truth, method='strict'):
     else:
         raise ValueError(f"Invalid reward function type: {reward_function_type}")
             
-    # breakpoint()
+
     if random.random() < 0.05:
         # for 5% of the cases, print; otherwise, print nothing to accelerate the process 
         print(f"\n[Model Response]\n{solution_str}")

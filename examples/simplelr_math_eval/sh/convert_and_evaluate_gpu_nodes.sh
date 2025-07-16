@@ -2,8 +2,8 @@
 set -x
 
 # 参数检查
-if [ "$#" -gt 14 ]; then
-    echo "Usage: $0 <eval_script_path> <base_checkpoint_path> <init_model_path> <template> [benchmarks] [temperature] [max_tokens] [top_p] [tp_size] [ckpt_list_file] [output_dir] [overwrite] [n_sampling] "
+if [ "$#" -gt 20 ]; then # 增加参数个数检查
+    echo "Usage: $0 <eval_script_path> <base_checkpoint_path> <init_model_path> <template> [benchmarks] [temperature] [max_tokens] [top_p] [tp_size] [ckpt_list_file] [output_dir] [overwrite] [n_sampling] [visible_gpus] [calculate_metrics] [metrics_to_calc] [metric_stride] [metric_orders] [num_test_sample_per_dataset] [dtype]"
     exit 1
 fi
 
@@ -22,8 +22,16 @@ output_dir_base=${11:-"eval_results"}
 overwrite=${12:-false}
 n_sampling=${13:-1}
 # output_dir="${output_dir_base}_n${n_sampling}"
+output_dir="${output_dir_base}"
 actor_dir="actor"
 
+visible_gpus=${14:-""}
+calculate_metrics=${15:-"false"}
+metrics_to_calc=${16:-""}
+metric_stride=${17:-1}
+metric_orders=${18:-"0,1,2"}
+num_test_sample_per_dataset=${19:--1}  # 默认值为 -1，表示使用所有样本
+dtype=${20:-"torch.float16"}
 # visible_gpus=${14:-""} 
 # # 设置可见的 GPU
 # if [ -n "$visible_gpus" ]; then
@@ -141,7 +149,13 @@ process_checkpoint() {
     output_path_new="$base_checkpoint_path/$output_dir/$step_tag"
     mkdir -p "$output_path_new"
     
-    CUDA_VISIBLE_DEVICES=$gpu_ids bash "$eval_script_path" ${template} "$ckpt_path" "$output_path_new" "$temperature" "$max_tokens" "$top_p" "$benchmarks" "$overwrite" "$n_sampling"
+    CUDA_VISIBLE_DEVICES=$gpu_ids bash "$eval_script_path" \
+        ${template} "$ckpt_path" "$output_path_new" "$temperature" \
+        "$max_tokens" "$top_p" "$benchmarks" "$overwrite" "$n_sampling" \
+        "$calculate_metrics" "$metrics_to_calc" "$metric_stride" "$metric_orders" "$num_test_sample_per_dataset" \
+        "$dtype" 
+
+
 }
 
 # 记录当前工作目录
@@ -172,7 +186,7 @@ for i in "${!checkpoints_to_evaluate[@]}"; do
     step_tag="${checkpoints_to_evaluate[i]}"
     
     # 在后台启动处理任务
-    process_checkpoint "$step_tag" "$group_id" &
+    process_checkpoint "$step_tag" "$group_id" 
     
     # 每启动NUM_GPU_GROUPS个任务后等待它们完成
     if [ $(((i + 1) % NUM_GPU_GROUPS)) -eq 0 ]; then

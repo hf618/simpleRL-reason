@@ -166,8 +166,8 @@ class ActorRolloutRefWorker(Worker):
 
         torch_dtype = fsdp_config.get('model_dtype', None)
         if torch_dtype is None:
-            torch_dtype = torch.float32 if self._is_actor else torch.bfloat16
             # torch_dtype = torch.float32 if self._is_actor else torch.bfloat16
+            torch_dtype = torch.float32 if self._is_actor else torch.float16
         else:
             torch_dtype = PrecisionType.to_dtype(torch_dtype)
 
@@ -243,13 +243,13 @@ class ActorRolloutRefWorker(Worker):
         # We wrap FSDP for rollout as well
         mixed_precision_config = fsdp_config.get('mixed_precision', None)
         if mixed_precision_config is not None:
-            param_dtype = PrecisionType.to_dtype(mixed_precision_config.get('param_dtype', 'bf16'))
-            # param_dtype = PrecisionType.to_dtype(mixed_precision_config.get('param_dtype', 'fp16'))
+            # param_dtype = PrecisionType.to_dtype(mixed_precision_config.get('param_dtype', 'bf16'))
+            param_dtype = PrecisionType.to_dtype(mixed_precision_config.get('param_dtype', 'fp16'))
             reduce_dtype = PrecisionType.to_dtype(mixed_precision_config.get('reduce_dtype', 'fp32'))
             buffer_dtype = PrecisionType.to_dtype(mixed_precision_config.get('buffer_dtype', 'fp32'))
         else:
-            param_dtype = torch.bfloat16
             # param_dtype = torch.bfloat16
+            param_dtype = torch.float16
             reduce_dtype = torch.float32
             buffer_dtype = torch.float32
 
@@ -697,7 +697,7 @@ class CriticWorker(Worker):
                                                                             # torch_dtype=torch_dtype,
                                                                             config=critic_model_config,
                                                                             # attn_implementation='flash_attention_2',
-                                                                            torch_dtype=torch.bfloat16,
+                                                                            torch_dtype=torch.float16,
                                                                             attn_implementation='eager',
                                                                             trust_remote_code=trust_remote_code)
 
@@ -720,7 +720,7 @@ class CriticWorker(Worker):
             buffer_dtype = PrecisionType.to_dtype(mixed_precision_config.get('buffer_dtype', 'fp32'))
         else:
             # param_dtype = torch.bfloat16
-            param_dtype = torch.bfloat16
+            param_dtype = torch.float16
             reduce_dtype = torch.float32
             buffer_dtype = torch.float32
 
@@ -960,7 +960,7 @@ class RewardModelWorker(Worker):
                                                                             config=model_config,
                                                                             # torch_dtype=torch.bfloat16,
                                                                             # attn_implementation='flash_attention_2',
-                                                                            torch_dtype=torch.bfloat16,
+                                                                            torch_dtype=torch.float16,
                                                                             attn_implementation='eager',
                                                                             trust_remote_code=trust_remote_code)
             reward_module.to(torch.bfloat16)

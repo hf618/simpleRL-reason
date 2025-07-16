@@ -648,11 +648,12 @@ class RayPPOTrainer(object):
                                        filter_prompts=True,
                                        return_raw_chat=self.config.data.get('return_raw_chat', False),
                                        truncation='error')
-        self.val_dataloader = DataLoader(dataset=self.val_dataset,
-                                         batch_size=len(self.val_dataset),
-                                         shuffle=True,
-                                         drop_last=True,
-                                         collate_fn=collate_fn)
+        # self.val_dataloader = DataLoader(dataset=self.val_dataset,
+        #                                  batch_size=len(self.val_dataset),
+        #                                  shuffle=True,
+        #                                  drop_last=True,
+        #                                  collate_fn=collate_fn)
+
         # sampled_indices = np.random.choice(len(self.val_dataset), size=10, replace=False)
         # sampled_dataset = Subset(self.val_dataset, sampled_indices)
         # self.val_dataloader = DataLoader(
@@ -662,6 +663,30 @@ class RayPPOTrainer(object):
         #     drop_last=False,
         #     collate_fn=collate_fn
         # )
+        # <<< INICIO DE MODIFICACIONES >>>
+        # Lógica para submuestrear el dataloader de validación si se especifica
+        val_sample_size = self.config.trainer.get('val_sample_size', -1)
+        if val_sample_size > 0:
+            print(f"Sampling {val_sample_size} examples from the validation set.")
+            # Asegurarse de que el tamaño de la muestra no exceda el tamaño del dataset
+            sample_size = min(val_sample_size, len(self.val_dataset))
+            sampled_indices = np.random.choice(len(self.val_dataset), size=sample_size, replace=False)
+            sampled_dataset = Subset(self.val_dataset, sampled_indices)
+            self.val_dataloader = DataLoader(
+                dataset=sampled_dataset,
+                batch_size=len(sampled_dataset),  # Cargar todas las muestras en un solo batch
+                shuffle=False,  # Ya se muestreó aleatoriamente
+                drop_last=False,
+                collate_fn=collate_fn
+            )
+        else:
+            print("Using the full validation set.")
+            self.val_dataloader = DataLoader(dataset=self.val_dataset,
+                                             batch_size=len(self.val_dataset),
+                                             shuffle=True,
+                                             drop_last=True,
+                                             collate_fn=collate_fn)
+        # <<< FIN DE MODIFICACIONES >>>
 
         assert len(self.train_dataloader) >= 1
         assert len(self.val_dataloader) >= 1
@@ -689,6 +714,10 @@ class RayPPOTrainer(object):
         reward_tensor_0_lst = []
         data_source_lst = []
         calculater_lst = []
+
+
+        use_calculator = self.config.calculator.get('enable', True)
+
         for test_data in self.val_dataloader:
             
             test_batch = DataProto.from_single_dict(test_data)
@@ -721,13 +750,22 @@ class RayPPOTrainer(object):
             prompt_len = test_batch.batch['prompts'].shape[1]  # 例如 512
             response_attention_mask = test_batch.batch['attention_mask'][:, prompt_len:]
             lens_tensor = response_attention_mask.sum(dim=-1)  # [10] - sum of non-padding tokens for each sample
-            test_batch.batch['calculator_results'] = self.calculator(
-                hidden_states=test_batch.batch['hidden_states'],  # [10, 2048, 2, 896]
-                attention_mask=response_attention_mask,  # [10, 2048]
-                compute_diff=True, 
-                diff_stride=20
-            )
-            calculater_lst.append(test_batch.batch['calculator_results'])
+
+
+            # <<< INICIO DE MODIFICACIONES EN _validate >>>
+            # Obtener diff_stride desde la configuración de Hydra
+            if use_calculator:
+                diff_stride_val = self.config.calculator.get('diff_stride', 20)
+                
+                test_batch.batch['calculator_results'] = self.calculator(
+                    hidden_states=test_batch.batch['hidden_states'],  # [10, 2048, 2, 896]
+                    attention_mask=response_attention_mask,  # [10, 2048]
+                    compute_diff=True, 
+                    diff_stride=diff_stride_val  # Usar el valor de la configuración
+                )
+                # <<< FIN DE MODIFICACIONES EN _validate >>>
+
+                calculater_lst.append(test_batch.batch['calculator_results'])
             
             # Add these near where other lists are initialized
             length_lst = []
@@ -752,11 +790,17 @@ class RayPPOTrainer(object):
             
 
             
+
+            
         reward_tensor_0 = torch.cat(reward_tensor_0_lst, dim=0).sum(-1).cpu()  # (batch_size,)
         reward_tensor = torch.cat(reward_tensor_lst, dim=0).sum(-1).cpu()  # (batch_size,)
         correctness_tensor = torch.cat(correctness_lst, dim=0).cpu()
         data_sources = np.concatenate(data_source_lst, axis=0)
-        calculator_cat = concatenate_results(calculater_lst)
+        
+        if use_calculator:
+            calculator_cat = concatenate_results(calculater_lst)
+        else:
+            calculator_cat = {}
         length_tensor = torch.cat(length_lst, dim=0).cpu()  # (total_batch_size,)
         # evaluate test_score based on data source
         data_source_reward_0 = {}
@@ -772,51 +816,51 @@ class RayPPOTrainer(object):
         # Add these near where other data_source dictionaries are initialized
         data_source_length = {}
 
-        for i in range(reward_tensor.shape[0]):
-            data_source = data_sources[i]
-            is_correct = correctness_tensor[i].item() # 获取当前样本的正确性标签
 
-            if data_source not in data_source_reward:
-                data_source_reward_0[data_source] = []
-                data_source_reward[data_source] = []
-                data_source_correctness[data_source] = []
-                # 初始化总体、正确和错误回答的 calculator 字典
-                data_source_calculator_overall[data_source] = {} # 恢复初始化总体字典
-                data_source_calculator_correct[data_source] = {}
-                data_source_calculator_incorrect[data_source] = {}
+        if calculator_cat:
+            for i in range(reward_tensor.shape[0]):
+                data_source = data_sources[i]
+                is_correct = correctness_tensor[i].item() # 获取当前样本正确性标签
+
+
+                if data_source not in data_source_reward:
+                    data_source_reward_0[data_source] = []
+                    data_source_reward[data_source] = []
+                    data_source_correctness[data_source] = []
+                    # 初始化总体、正确、错误回答的 calculator 字典
+                    data_source_calculator_overall[data_source] = {}
+                    data_source_calculator_correct[data_source] = {}
+                    data_source_calculator_incorrect[data_source] = {}
+
+                    data_source_length[data_source] = []
                 
-                data_source_length[data_source] = []
-            
+                data_source_reward_0[data_source].append(reward_tensor_0[i].item())
+                data_source_reward[data_source].append(reward_tensor[i].item())
+                data_source_correctness[data_source].append(is_correct)
+                data_source_length[data_source].append(length_tensor[i].item())
 
-            data_source_reward_0[data_source].append(reward_tensor_0[i].item())
-            data_source_reward[data_source].append(reward_tensor[i].item())
-            data_source_correctness[data_source].append(is_correct)
-            data_source_length[data_source].append(length_tensor[i].item())
 
-            for layer, layer_calculator in calculator_cat.items():
-                # 恢复：将总体指标添加到列表中
-                if layer not in data_source_calculator_overall[data_source]:
-                    data_source_calculator_overall[data_source][layer] = {}
-                if layer not in data_source_calculator_correct[data_source]:
-                    data_source_calculator_correct[data_source][layer] = {}
-                    data_source_calculator_incorrect[data_source][layer] = {}
-
-                for indicator, value_tensor in layer_calculator.items():
+                for layer, layer_calculator in calculator_cat.items():
                     # 恢复：将总体指标添加到列表中
-                    if indicator not in data_source_calculator_overall[data_source][layer]:
-                         data_source_calculator_overall[data_source][layer][indicator] = []
-                    if indicator not in data_source_calculator_correct[data_source][layer]:
-                        data_source_calculator_correct[data_source][layer][indicator] = []
-                        data_source_calculator_incorrect[data_source][layer][indicator] = []
+                    if layer not in data_source_calculator_overall[data_source]:
+                        data_source_calculator_overall[data_source][layer] = {}
+                    if layer not in data_source_calculator_correct[data_source]:
+                        data_source_calculator_correct[data_source][layer] = {}
+                        data_source_calculator_incorrect[data_source][layer] = {}
 
-                    # 恢复：将总体指标值添加到列表中
-                    data_source_calculator_overall[data_source][layer][indicator].append(value_tensor[i].item())
+                    for indicator, value_tensor in layer_calculator.items():
+                        if indicator not in data_source_calculator_overall[data_source][layer]:
+                             data_source_calculator_overall[data_source][layer][indicator] = []
+                        if indicator not in data_source_calculator_correct[data_source][layer]:
+                            data_source_calculator_correct[data_source][layer][indicator] = []
+                            data_source_calculator_incorrect[data_source][layer][indicator] = []
 
-                    # 根据正确性标签将指标值添加到相应的列表中
-                    if is_correct == 1: # 假设 1 表示正确
-                        data_source_calculator_correct[data_source][layer][indicator].append(value_tensor[i].item())
-                    else: # 假设其他值表示错误
-                        data_source_calculator_incorrect[data_source][layer][indicator].append(value_tensor[i].item())
+                        data_source_calculator_overall[data_source][layer][indicator].append(value_tensor[i].item())
+
+                        if is_correct == 1:
+                            data_source_calculator_correct[data_source][layer][indicator].append(value_tensor[i].item())
+                        else:
+                            data_source_calculator_incorrect[data_source][layer][indicator].append(value_tensor[i].item())
 
 
         metric_dict = {}
@@ -843,9 +887,12 @@ class RayPPOTrainer(object):
                         else:
                             metric_dict[key] = 0.0
 
-        fill_metrics("cal_correct", data_source_calculator_correct)
-        fill_metrics("cal_incorrect", data_source_calculator_incorrect)
-        fill_metrics("cal_overall", data_source_calculator_overall)
+        # <<< INICIO DE MODIFICACIONES EN _validate >>>
+        if calculator_cat:
+            fill_metrics("cal_correct", data_source_calculator_correct)
+            fill_metrics("cal_incorrect", data_source_calculator_incorrect)
+            fill_metrics("cal_overall", data_source_calculator_overall)
+        # <<< FIN DE MODIFICACIONES EN _validate >>>
 
 
         # Add these with the other metric calculations
@@ -859,7 +906,10 @@ class RayPPOTrainer(object):
             metric_dict[f'val/test_incorrect_len/{data_source}'] = np.mean(incorrect_lengths) if incorrect_lengths else 0.0
 
         
-        del test_batch.batch['hidden_states'], test_batch.batch['calculator_results']
+        if 'hidden_states' in test_batch.batch:
+            del test_batch.batch['hidden_states']
+        if 'calculator_results' in test_batch.batch:
+            del test_batch.batch['calculator_results']
 
         return metric_dict
 
@@ -1117,6 +1167,12 @@ class RayPPOTrainer(object):
             if self.config.trainer.get('val_only', False):
                 return
 
+
+        # <<< INICIO DE MODIFICACIONES EN fit >>>
+        # Leer el flag para habilitar/deshabilitar el calculator
+        use_calculator = self.config.calculator.get('enable', True)
+        # <<< FIN DE MODIFICACIONES EN fit >>>
+
         # we start from step 1
         self.global_steps += 1
         metrics_old = {}
@@ -1181,15 +1237,23 @@ class RayPPOTrainer(object):
                     # metrics.update(compute_response_metrics(batch=batch))
 
                     # 更新指标
-                    prompt_len = batch.batch['prompts'].shape[1]  # 例如 512
-                    response_attention_mask = batch.batch['attention_mask'][:, prompt_len:]
-                    batch.batch['calculator_results'] = self.calculator(
-                        hidden_states=batch.batch['hidden_states'],  # [10, 2048, 2, 896]
-                        attention_mask=response_attention_mask,  # [10, 2048]
-                        compute_diff=True, 
-                        diff_stride=20
-                    )
-                    del batch.batch['hidden_states']
+
+                    # <<< INICIO DE MODIFICACIONES EN fit >>>
+                    if use_calculator:
+                        prompt_len = batch.batch['prompts'].shape[1] # 例如 512
+                        response_attention_mask = batch.batch['attention_mask'][:, prompt_len:]
+                        diff_stride_train = self.config.calculator.get('diff_stride', 20)
+                        
+                        batch.batch['calculator_results'] = self.calculator(
+                            hidden_states=batch.batch['hidden_states'], # [10, 2048, 2, 896]
+                            attention_mask=response_attention_mask, # [10, 2048]
+                            compute_diff=True, 
+                            diff_stride=diff_stride_train
+                        )
+                        del batch.batch['hidden_states']
+
+                    # <<< FIN DE MODIFICACIONES EN fit >>>
+
 
                     
                     # 立即回收内存
@@ -1264,8 +1328,15 @@ class RayPPOTrainer(object):
                                                   num_repeat=self.config.actor_rollout_ref.rollout.n)
                     
                     metrics.update(compute_response_metrics(batch=batch))
-                    metrics.update(compute_calculator_metrics(batch.batch['calculator_results'], batch.batch['correctness'], self.reward_fn.mids))
-                    del batch.batch['calculator_results']
+                    # metrics.update(compute_calculator_metrics(batch.batch['calculator_results'], batch.batch['correctness'], self.reward_fn.mids))
+
+
+                    # <<< INICIO DE MODIFICACIONES EN fit >>>
+                    if use_calculator:
+                        metrics.update(compute_calculator_metrics(batch.batch['calculator_results'], batch.batch['correctness'], self.reward_fn.mids))
+                        del batch.batch['calculator_results']
+                    # <<< FIN DE MODIFICACIONES EN fit >>>
+
 
 
                     # update critic

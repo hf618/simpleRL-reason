@@ -11,6 +11,12 @@ SPLIT="test"
 NUM_TEST_SAMPLE=-1
 OVERWRITE=${8:-false}
 N_SAMPLING=${9:-1}
+CALCULATE_METRICS=${10:-"false"}
+METRICS_TO_CALC=${11:-""}
+METRIC_STRIDE=${12:-1}
+METRIC_ORDERS=${13:-"0,1,2"} 
+NUM_TEST_SAMPLE=${14:--1}  # 默认值为 -1，表示使用所有样本
+DTYPE=${15:-"torch.float16"}
 # English open datasets
 DATA_NAME=${benchmarks}
 
@@ -40,6 +46,7 @@ if [ "$temperature" = "0.0" ] || [ "$temperature" = "0" ]; then
 fi
 
 # Run regular benchmarks with n_sampling=1
+# Run regular benchmarks
 if [ ${#REGULAR_BENCHMARKS[@]} -gt 0 ]; then
     REGULAR_BENCHMARKS_STR=$(IFS=,; echo "${REGULAR_BENCHMARKS[*]}")
     TOKENIZERS_PARALLELISM=false \
@@ -47,9 +54,9 @@ if [ ${#REGULAR_BENCHMARKS[@]} -gt 0 ]; then
         --model_name_or_path ${MODEL_NAME_OR_PATH} \
         --data_name ${REGULAR_BENCHMARKS_STR} \
         --output_dir ${OUTPUT_DIR} \
-        --split ${SPLIT} \
+        --split "test" \
         --prompt_type ${PROMPT_TYPE} \
-        --num_test_sample ${NUM_TEST_SAMPLE} \
+        --num_test_sample -1 \
         --max_tokens_per_call ${max_tokens} \
         --seed 0 \
         --temperature ${temperature} \
@@ -59,7 +66,13 @@ if [ ${#REGULAR_BENCHMARKS[@]} -gt 0 ]; then
         --end -1 \
         --use_vllm \
         --save_outputs \
-        ${OVERWRITE}
+        --calculate_metrics ${CALCULATE_METRICS} \
+        --metrics_to_calc "${METRICS_TO_CALC}" \
+        --metric_stride ${METRIC_STRIDE} \
+        --metric_orders "${METRIC_ORDERS}" \
+        --num_test_sample_per_dataset ${NUM_TEST_SAMPLE} \
+        --dtype "${DTYPE}" \
+        ${OVERWRITE_FLAG}
 fi
 
 # Run special benchmarks (aime24, amc23) with n_sampling=8
@@ -70,9 +83,9 @@ if [ ${#SPECIAL_BENCHMARKS[@]} -gt 0 ]; then
         --model_name_or_path ${MODEL_NAME_OR_PATH} \
         --data_name ${SPECIAL_BENCHMARKS_STR} \
         --output_dir ${OUTPUT_DIR} \
-        --split ${SPLIT} \
+        --split "test" \
         --prompt_type ${PROMPT_TYPE} \
-        --num_test_sample ${NUM_TEST_SAMPLE} \
+        --num_test_sample -1 \
         --max_tokens_per_call ${max_tokens} \
         --seed 0 \
         --temperature ${temperature} \
@@ -82,5 +95,11 @@ if [ ${#SPECIAL_BENCHMARKS[@]} -gt 0 ]; then
         --end -1 \
         --use_vllm \
         --save_outputs \
-        ${OVERWRITE}
+        --calculate_metrics ${CALCULATE_METRICS} \
+        --metrics_to_calc "${METRICS_TO_CALC}" \
+        --metric_stride ${METRIC_STRIDE} \
+        --metric_orders "${METRIC_ORDERS}" \
+        --num_test_sample_per_dataset ${NUM_TEST_SAMPLE} \
+        --dtype "${DTYPE}" \
+        ${OVERWRITE_FLAG}
 fi

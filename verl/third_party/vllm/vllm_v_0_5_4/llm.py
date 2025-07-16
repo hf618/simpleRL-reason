@@ -63,10 +63,10 @@ class LLM(LLM):
         tensor_parallel_size: The number of GPUs to use for distributed
             execution with tensor parallelism.
         dtype: The data type for the model weights and activations. Currently,
-            we support `float32`, `bfloat16`, and `bfloat16`. If `auto`, we use
+            we support `float32`, `float16`, and `bfloat16`. If `auto`, we use
             the `torch_dtype` attribute specified in the model config file.
             However, if the `torch_dtype` in the config is `float32`, we will
-            use `bfloat16` instead.
+            use `float16` instead.
         quantization: The method used to quantize the model weights. Currently,
             we support "awq". If None, we assume the model weights are not
             quantized and use `dtype` to determine the data type of the weights.
@@ -193,7 +193,7 @@ class LLM(LLM):
                             pbar.postfix = (f"est. speed input: {in_spd:.2f} toks/s, "
                                             f"output: {out_spd:.2f} toks/s")
                         pbar.update(1)
-                # breakpoint()
+                # 
                 
         if use_tqdm:
             pbar.close()
@@ -247,3 +247,5 @@ class LLM(LLM):
 
     def offload_model_weights(self) -> None:
         self.llm_engine.offload_model_weights()
+
+

@@ -17,6 +17,14 @@ from data_loader import load_data
 from python_executor import PythonExecutor
 from model_utils import load_hf_lm_and_tokenizer, generate_completions
 
+import json # 确保导入
+# from metrics_calculator import RepresentationMetricsCalculator # 导入新创建的类
+import sys
+import os
+project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+sys.path.append(project_root)
+from metrics_calculator import RepresentationMetricsCalculator 
+import ipdb
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -51,15 +59,40 @@ def parse_args():
         action="store_true",
         help="Few shot for multiple-choice questions, zero shot for others.",
     )
+    parser.add_argument("--calculate_metrics", type=str, default="false", help="Enable hidden states metrics calculation.")
+    parser.add_argument("--metrics_to_calc", type=str, default="Response Entropy 1", help="Comma-separated list of metrics to calculate.")
+    parser.add_argument("--metric_orders", type=str, default="0,1,2", help="Orders of metrics to calculate, e.g., '0,1'.")
+    parser.add_argument("--metric_stride", type=int, default=10, help="Stride for calculating metrics.")
+    parser.add_argument("--num_test_sample_per_dataset", 
+                        type=int, 
+                        default=-1,  # -1 表示使用所有样本
+                        help="Number of test samples per dataset to use for debugging")
+    parser.add_argument("--dtype", default="torch.float16", type=str, help="Data type for the model (e.g., 'torch.float16', 'torch.bfloat16', 'auto')")
     args = parser.parse_args()
     args.top_p = (
         1 if args.temperature == 0 else args.top_p
     )  # top_p must be 1 when using greedy sampling (vllm)
+    # 将字符串 "true" 或 "false" 转换为布尔值
+    args.calculate_metrics = args.calculate_metrics.lower() in ['true', '1', 't', 'y', 'yes']
+
+    # --- 新增：如果开启计算但未指定指标，则关闭计算 ---
+    if args.calculate_metrics and not args.metrics_to_calc:
+        print("[INFO] --calculate_metrics is true but --metrics_to_calc is empty. Disabling metrics calculation.")
+        args.calculate_metrics = False
+   
     return args
 
 
 def prepare_data(data_name, args):
     examples = load_data(data_name, args.split, args.data_dir)
+
+
+    # ========== 使用新参数控制样本数 ==========
+    if args.num_test_sample_per_dataset > 0:
+        examples = examples[:args.num_test_sample_per_dataset]
+        print(f"<<<<< DEBUG MODE: USING FIRST {args.num_test_sample_per_dataset} SAMPLES IN {data_name} >>>>>")
+    # =======================================
+
 
     # sample `num_test_sample` from dataset
     if args.num_test_sample > 0:
@@ -82,6 +115,10 @@ def prepare_data(data_name, args):
     # if not os.path.exists(output_dir):
     #     output_dir = f"outputs/{output_dir}"
     out_file = f"{output_dir}/{data_name}/{out_file_prefix}_s{args.start}_e{args.end}.jsonl"
+    metrics_out_file = f"{output_dir}/{data_name}/{out_file_prefix}_s{args.start}_e{args.end}_repr_metrics.jsonl"
+    # --- 新增：为 stride 详情文件准备文件名 ---
+    stride_details_out_file = f"{output_dir}/{data_name}/{out_file_prefix}_s{args.start}_e{args.end}_stride_details.jsonl"
+   
     os.makedirs(f"{output_dir}/{data_name}", exist_ok=True)
 
     # load all processed samples
@@ -102,10 +139,24 @@ def prepare_data(data_name, args):
     processed_idxs = list(processed_samples.keys())
     processed_samples = list(processed_samples.values())
     examples = [example for example in examples if example["idx"] not in processed_idxs]
-    return examples, processed_samples, out_file
+
+    return examples, processed_samples, out_file, metrics_out_file, stride_details_out_file
 
 
 def setup(args):
+
+    # Helper function to convert string to torch.dtype
+    def get_torch_dtype(dtype_str):
+        if dtype_str in ["torch.float16", "float16"]:
+            return torch.float16
+        elif dtype_str in ["torch.bfloat16", "bfloat16"]:
+            return torch.bfloat16
+        elif dtype_str == "auto":
+            return "auto"
+        else:
+            # Fallback to float16 for unrecognized strings
+            return torch.float16
+
     # load model
     
     available_gpus = os.environ["CUDA_VISIBLE_DEVICES"].split(",")
@@ -128,18 +179,22 @@ def setup(args):
             exit(0)
         data_list = need_eval_data_list
     
+
+    model_dtype = get_torch_dtype(args.dtype)
     if args.use_vllm:
         llm = LLM(
             model=args.model_name_or_path,
             tensor_parallel_size=len(available_gpus) // args.pipeline_parallel_size,
             pipeline_parallel_size=args.pipeline_parallel_size,
             trust_remote_code=True,
-            dtype=torch.bfloat16,
+            dtype=model_dtype,
+            enforce_eager=True,
+            enable_chunked_prefill=False
         )
         tokenizer = None
         if args.apply_chat_template:
             tokenizer = AutoTokenizer.from_pretrained(
-                args.model_name_or_path, trust_remote_code=True, dtype=torch.bfloat16,
+                args.model_name_or_path, trust_remote_code=True, dtype=model_dtype, enforce_eager=True
             )
     else:
         llm, tokenizer = load_hf_lm_and_tokenizer(
@@ -147,6 +202,7 @@ def setup(args):
             load_in_half=True,
             use_fast_tokenizer=True,
             use_safetensors=args.use_safetensors,
+            dtype=torch.float16,
         )
 
     # infer & eval
@@ -176,7 +232,17 @@ def is_multi_choice(answer):
 
 
 def main(llm, tokenizer, data_name, args):
-    examples, processed_samples, out_file = prepare_data(data_name, args)
+
+    examples, processed_samples, out_file, metrics_out_file, stride_details_out_file = prepare_data(data_name, args)
+
+
+    # 初始化 RepresentationMetricsCalculator
+    metrics_calculator = None
+    if args.calculate_metrics:
+        print("Representation metrics calculation is enabled.")
+        metrics_calculator = RepresentationMetricsCalculator(tokenizer=tokenizer)
+
+
     print("=" * 50)
     print("data:", data_name, " ,remain samples:", len(examples))
     if len(examples) > 0:
@@ -294,7 +360,6 @@ def main(llm, tokenizer, data_name, args):
                 stop_token_ids = [22478, 24994, 26307, 9977]
         elif "qwen2" in args.model_name_or_path.lower():
             stop_token_ids = [151645, 151643]  
-
         
         if args.use_vllm:
             outputs = llm.generate(
@@ -308,14 +373,31 @@ def main(llm, tokenizer, data_name, args):
                     stop_token_ids=stop_token_ids,
                 ),
             )
+            
 
-            outputs = sorted(
-                outputs, key=lambda x: int(x.request_id)
-            )  # sort outputs by request_id
-            outputs = [
-                (output.outputs[0].text, output.outputs[0].finish_reason)
-                for output in outputs
-            ]
+
+            outputs = sorted(outputs, key=lambda x: int(x.request_id))  # sort outputs by request_id
+
+            # 假设 hidden_states 在 output 对象中
+            hidden_states_list = []
+            if args.calculate_metrics:
+                for output in outputs:
+                    # 路径取决于您的 vLLM 版本，这里是一个假设的路径
+                    if output.hidden_states[0] is not None:
+                        hidden_states_list.append(output.hidden_states[0].to(torch.float32))  # 确保转换为 float16
+                    else:
+                        print("Warning: `hidden_states` not found in vLLM output. Metrics calculation will be skipped.")
+                        args.calculate_metrics = False
+                        break # 后续不再检查
+
+            # 提取文本、完成原因和 hidden_states
+            outputs = [(output.outputs[0].text, output.outputs[0].finish_reason) for output in outputs]
+            
+
+            # outputs = [
+            #     (output.outputs[0].text, output.outputs[0].finish_reason)
+            #     for output in outputs
+            # breakpoint()
         else:
             outputs_text = generate_completions(
                 model=llm,
@@ -328,7 +410,9 @@ def main(llm, tokenizer, data_name, args):
             # 对于非 vllm 模型，finish_reason 暂时设为 None
             outputs = [(text, None) for text in outputs_text]
 
-        assert len(outputs) == len(current_prompts)
+
+
+        # assert len(outputs) == len(current_prompts)
 
         # process all outputs
         remain_prompts = []
@@ -366,6 +450,59 @@ def main(llm, tokenizer, data_name, args):
             if epoch == max_func_call - 1:
                 query += "\nReach max function call limit."
             remain_prompts[k] = (i, query,finish_reason)
+
+    # --- 指标计算和保存 ---
+    all_aggregated_metrics_data = []
+    all_stride_details_data = [] # <--- 新增
+    if args.calculate_metrics and metrics_calculator:
+        print("Calculating representation metrics...")
+
+        # --- 新增：预处理要计算的指标列表 ---
+        metrics_to_calc_list = [m.strip() for m in args.metrics_to_calc.split(',') if m.strip()]
+        orders_to_calc = [int(o.strip()) for o in args.metric_orders.split(',') if o.strip()]
+
+        
+        for i, sample in enumerate(tqdm(samples, desc="Calculating Metrics")):
+            hidden_states = hidden_states_list[i]
+            if hidden_states is None or hidden_states.dim() != 3: # 确保是3D张量 (seq_len, num_layers, hidden_dim)
+                print(f"Skipping sample {i} due to invalid hidden_states.")
+                continue
+            
+            # 构造对应的 attention_mask
+            seq_len = hidden_states.shape[0] # 注意：现在 seq_len 在第0维
+            attention_mask = torch.ones(seq_len, device=hidden_states.device)
+
+            # --- 关键修改：接收两个返回值 ---
+            aggregated_metrics, stride_details = metrics_calculator(
+                hidden_states=hidden_states,
+                attention_mask=attention_mask,
+                compute_diff=True,
+                diff_stride=args.metric_stride,
+                metrics_to_calc=metrics_to_calc_list,
+                orders_to_calc=orders_to_calc # <--- 传递阶数控制参数
+            )
+            
+            # aggregated_metrics 已经是过滤后的结果
+            all_aggregated_metrics_data.append({
+                "idx": sample["idx"],
+                "metrics": {
+                    layer: {k: round(v.item(), 5) for k, v in metrics.items()}
+                    for layer, metrics in aggregated_metrics.items()
+                }
+            })
+            
+            # stride_details 同样已经是过滤后的结果
+            all_stride_details_data.append({
+                "idx": sample["idx"],
+                "stride_details": {
+                    # --- 修正：直接对 float 类型的 val 进行 round ---
+                    layer: {k: [round(val, 5) for val in v] for k, v in details.items()} # <--- 修正行
+                    for layer, details in stride_details.items()
+                }
+            })
+
+
+
 
     # unsolved samples
     print("Unsolved samples:", len(remain_prompts))
@@ -429,8 +566,16 @@ def main(llm, tokenizer, data_name, args):
     )
 
     # save outputs
+    # --- 修改保存逻辑 ---
     if len(processed_samples) < len(all_samples) and args.save_outputs:
         save_jsonl(all_samples, out_file)
+        if all_aggregated_metrics_data:
+            print(f"Saving aggregated representation metrics to {metrics_out_file}")
+            save_jsonl(all_aggregated_metrics_data, metrics_out_file)
+        # --- 新增：保存 stride 详情文件 ---
+        if all_stride_details_data:
+            print(f"Saving stride detail metrics to {stride_details_out_file}")
+            save_jsonl(all_stride_details_data, stride_details_out_file)
 
     result_json["time_use_in_second"] = time_use
     result_json["time_use_in_minite"] = (

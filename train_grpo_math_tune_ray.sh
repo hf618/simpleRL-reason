@@ -7,24 +7,24 @@ export RAY_BACKEND_LOG_LEVEL=debug
 export RAY_DEDUP_LOGS=1
 
 
-export PROJECT_NAME=verl_train_gnode5
+export PROJECT_NAME=verl_train_gpugeek
 export WANDB_API_KEY=8c84ddd422687515e5df25109f349a4f2c5df884
 export WANDB_OFFICIAL=1
-export VLLM_ATTENTION_BACKEND=XFORMERS
-export HDFS_DATA_PATH=/home/fdhuang/simpleRL-reason/custom/data
-export HDFS_MODEL_PATH=/home/fdhuang/Model/qwen
-export HDFS_CHECKPOINT_PATH=/home/fdhuang/simpleRL-reason/custom/checkpoint
-export HDFS_LOG_PATH=/home/fdhuang/simpleRL-reason/custom/log
+export VLLM_ATTENTION_BACKEND=FLASH_ATTN # FLASHINFER # XFORMERS
+export HDFS_DATA_PATH=/gz-data/custom/data
+export HDFS_MODEL_PATH=/gz-data/Models/qwen
+export HDFS_CHECKPOINT_PATH=/gz-data/custom/checkpoint
+export HDFS_LOG_PATH=/gz-data/custom/log
 export RUN_NAME=verl-grpo
 export ARNOLD_WORKER_NUM=1 # number of nodes you want to use 
 
 export RAY_OVERRIDE_JOB_RUNTIME_ENV=1
 export CUDA_LAUNCH_BLOCKING=1  # 同步CUDA错误
 export NCCL_DEBUG=INFO          # 启用NCCL详细日志
-export NCCL_SOCKET_IFNAME=eno2np1 # 指定网卡（根据ifconfig替换）
-export LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/usr/local/cuda-12.6/lib64:$LD_LIBRARY_PATH
+export NCCL_SOCKET_IFNAME=eth0 # 指定网卡（根据ifconfig替换）
+# export LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/usr/local/cuda-12.6/lib64:$LD_LIBRARY_PATH
 # export LD_LIBRARY_PATH=$HOME/.local/lib:/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH
-export LD_PRELOAD=$HOME/.local/lib/libcuda.so
+# export LD_PRELOAD=$HOME/.local/lib/libcuda.so
 export RAY_pickling_fallback="True"
 export PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python
 
@@ -33,10 +33,10 @@ export REWORD_FUNCTION_TYPE="independent"
 # n这三个平凡更换
 export CUDA_VISIBLE_DEVICES="0,1,2,3"  # 只使用 GPU 0 和 1
 NUM_GPUS=4
-HEAD_PORT="35604" # 注意更换 23857
+HEAD_PORT="6379" # 注意更换 6379
 
 WORKING_DIR="."
-HEAD_IP="192.168.1.105"
+HEAD_IP="172.17.0.2" # 注意更换为你的 head ip
 
 
 # Default values
@@ -67,10 +67,24 @@ ROLLOUT_TENSOR_MODEL_PARALLEL_SIZE=2
 MICRO_ROLLOUT_BATCH_SIZE=1024
 REMOVE_PREVIOUS_CKPT=False
 
+# Default values for new parameters
+REWARD_EMA_ALPHA=""
+REWARD_INDICATOR_NAMES=""
+REWARD_WEIGHTS=""
+REWARD_WEIGHTS_INNER=""
+
+# <<< 修改点 1: 将 HYDRA_OVERRIDES 初始化为数组 >>>
+HYDRA_OVERRIDES=()
+VAL_BEFORE_TRAIN=True
+VAL_SAMPLE_SIZE=-1
+ENABLE_CALCULATOR=True
+DIFF_STRIDE=20
+ADD_REWARD=True
+COMPUTE_LOG_EFFECTIVE_RANK=False
+
 generate_suffix() {
   local suffix=""
   local dataset_provided=false
-  local model_provided=false
   local suffix_provided=false
 
   while [[ "$#" -gt 0 ]]; do
@@ -92,23 +106,23 @@ generate_suffix() {
       --kl_coef) suffix+="_klcontrol$2"; shift 2 ;;
       --total_epochs) suffix+="_epochs$2"; shift 2 ;;
       --rollout_gpu_memory_util) shift 2 ;;
+      # --- 重点检查这一行 ---
       --dataset_name) suffix+="_$2"; dataset_provided=true; shift 2 ;;
-      --model_name) suffix+="_$2"; model_provided=true; shift 2 ;;
+      # ---------------------
       --remove_clip) suffix+="_remove_clip$2"; shift 2 ;;
       --suffix) input_suffix="$2"; suffix_provided=true; shift 2 ;;
       --logger_config) LOGGER_CONFIG="$2"; shift 2 ;;
       --exp_name) EXP_NAME="$2"; shift 2 ;;
+      --diff_stride) suffix+="_stride$2"; shift 2 ;;
       *) shift ;;
     esac
   done
 
-  if [ "$dataset_provided" = false ]; then
-    suffix+="_$DATASET_NAME"
-  fi
-
-  if [ "$model_provided" = false ]; then
-    suffix+="_$MODEL_NAME"
-  fi
+  # 如果命令行中没有提供 --dataset_name，则使用默认值
+  # 因为上面设置了标志位，所以这里不会重复添加
+  # if [ "$dataset_provided" = false ]; then
+  #   suffix+="_$DATASET_NAME"
+  # fi
 
   if [ "$suffix_provided" = true ]; then
     suffix+="_$input_suffix"
@@ -157,12 +171,41 @@ while [[ "$#" -gt 0 ]]; do
     --suffix) SUFFIX="$2"; shift 2 ;;
     --logger_config) LOGGER_CONFIG="$2"; shift 2 ;;
     --exp_name) EXP_NAME="$2"; shift 2 ;;
+    # <<< 新增参数解析 >>>
+    --reward_ema_alpha) REWARD_EMA_ALPHA="$2"; shift 2 ;;
+    --reward_indicator_names) REWARD_INDICATOR_NAMES="$2"; shift 2 ;;
+    --reward_weights) REWARD_WEIGHTS="$2"; shift 2 ;;
+    --reward_weights_inner) REWARD_WEIGHTS_INNER="$2"; shift 2 ;;
+    --val_before_train) VAL_BEFORE_TRAIN="$2"; shift 2 ;;
+    --val_sample_size) VAL_SAMPLE_SIZE="$2"; shift 2 ;;
+    --diff_stride) DIFF_STRIDE="$2"; shift 2 ;;
+    --enable_calculator) ENABLE_CALCULATOR="$2"; shift 2 ;;
+    --add_reward) ADD_REWARD="$2"; shift 2 ;;
+    --compute_log_effective_rank) COMPUTE_LOG_EFFECTIVE_RANK="$2"; shift 2 ;;
+    # <<< 新增结束 >>>
     *)
       echo "Unknown option: $1"
       exit 1
       ;;
   esac
 done
+
+
+# ... (End of argument parsing while loop)
+
+# Generate a unique suffix based on the input arguments (now without model name)
+SUFFIX=$(generate_suffix "$@")
+
+# Construct the FINAL_RUN_NAME in the desired order: {model}_{exp}_{base}{suffix}
+# For example: Qwen2.5-3B_origin_verl-grpo_max_response1280...
+FINAL_RUN_NAME="${MODEL_NAME}_${EXP_NAME}_${RUN_NAME}${SUFFIX}"
+
+# Update the log file path to use the new name
+LOG_FILE_PATH="$HDFS_LOG_PATH/$FINAL_RUN_NAME.log"
+# The EXP_NAME variable is now part of the FINAL_RUN_NAME
+
+# ... (echo statements)
+
 
 echo "Training with the following parameters:"
 echo "Train Batch Size: $TRAIN_BATCH_SIZE"
@@ -181,7 +224,36 @@ echo "Remove Previous Ckpt: $REMOVE_PREVIOUS_CKPT"
 echo "LOG FILE PATH: $LOG_FILE_PATH"
 
 max_num_batched_tokens=$(expr $MAX_PROMPT_LENGTH + $MAX_RESPONSE_LENGTH + 100)
+
 echo -e "Training with the following parameters:\nTrain Batch Size: $TRAIN_BATCH_SIZE\nVal Batch Size: $VAL_BATCH_SIZE\nMax Prompt Length: $MAX_PROMPT_LENGTH\nMax Response Length: $MAX_RESPONSE_LENGTH\nLearning Rate: $LEARNING_RATE\nPPO Mini Batch Size: $PPO_MINI_BATCH_SIZE\nPPO Micro Batch Size: $PPO_MICRO_BATCH_SIZE\nKL Loss Coefficient: $KL_LOSS_COEF\nKL Loss Type: $KL_LOSS_TYPE\nTemperature: $TEMPERATURE\nRollout N: $ROLLOUT_N\nKL Coefficient: $KL_COEF\nTotal Epochs: $TOTAL_EPOCHS\nDataset Name: $DATASET_NAME\nModel Name: $MODEL_NAME"
+echo "Validate Before Train: $VAL_BEFORE_TRAIN"
+echo "Validation Sample Size: $VAL_SAMPLE_SIZE"
+echo "Calculator Diff Stride: $DIFF_STRIDE"
+echo "Enable Calculator Metrics: $ENABLE_CALCULATOR"
+echo "Add Reward enabled: $ADD_REWARD"
+echo "Compute Log Effective Rank: $COMPUTE_LOG_EFFECTIVE_RANK"
+echo "LOG FILE PATH: $LOG_FILE_PATH"
+# <<< 修改点 2: 构建 hydra 参数数组 >>>
+# 将覆盖参数作为独立元素添加到数组中
+if [ -n "$REWARD_EMA_ALPHA" ]; then
+  HYDRA_OVERRIDES+=("reward_manager.ema_alpha=$REWARD_EMA_ALPHA")
+fi
+if [ -n "$REWARD_INDICATOR_NAMES" ]; then
+  # 这里直接使用变量，不添加额外的引号
+  HYDRA_OVERRIDES+=("reward_manager.indicator_names=$REWARD_INDICATOR_NAMES")
+fi
+if [ -n "$REWARD_WEIGHTS" ]; then
+  HYDRA_OVERRIDES+=("reward_manager.weights=$REWARD_WEIGHTS")
+fi
+if [ -n "$REWARD_WEIGHTS_INNER" ]; then
+  HYDRA_OVERRIDES+=("reward_manager.weights_inner=$REWARD_WEIGHTS_INNER")
+fi
+if [ -n "$ADD_REWARD" ]; then
+  HYDRA_OVERRIDES+=("reward_manager.add_reward=$ADD_REWARD")
+fi
+if [ -n "$COMPUTE_LOG_EFFECTIVE_RANK" ]; then
+  HYDRA_OVERRIDES+=("calculator.compute_log_effective_rank=$COMPUTE_LOG_EFFECTIVE_RANK")
+fi
 
 
 ray job submit --address=${HEAD_IP}:${HEAD_PORT} \
@@ -194,7 +266,7 @@ ray job submit --address=${HEAD_IP}:${HEAD_PORT} \
           "/custom/checkpoint/",
           "/custom/log/",
           "/custom/data/",
-          "/home/fdhuang/simpleRL-reason/examples/simplelr_math_eval/data/tabmwp/test.jsonl"
+          "/root/simpleRL-reason/examples/simplelr_math_eval/data/tabmwp/test.jsonl"
         ],
         "env_vars": {
           "http_proxy": "",
@@ -202,7 +274,7 @@ ray job submit --address=${HEAD_IP}:${HEAD_PORT} \
           "WANDB_API_KEY": "8c84ddd422687515e5df25109f349a4f2c5df884",
           "CUDA_LAUNCH_BLOCKING": "1",
           "NCCL_DEBUG": "INFO",
-          "NCCL_SOCKET_IFNAME": "eno2np1",
+          "NCCL_SOCKET_IFNAME": "eth0",
           "RAY_OVERRIDE_JOB_RUNTIME_ENV": "1",
           "REWORD_FUNCTION_TYPE": "independent",
           "RAY_DEBUG": "legacy"
@@ -226,10 +298,6 @@ ray job submit --address=${HEAD_IP}:${HEAD_PORT} \
   actor_rollout_ref.actor.entropy_coeff=$ENTROPY_COEFFIENT \
   actor_rollout_ref.actor.clip_ratio=$CLIP_RATIO \
   actor_rollout_ref.actor.kl_loss_type=$KL_LOSS_TYPE \
-  actor_rollout_ref.model.enable_gradient_checkpointing=True \
-  actor_rollout_ref.actor.fsdp_config.param_offload=False\
-  actor_rollout_ref.actor.fsdp_config.grad_offload=False \
-  actor_rollout_ref.actor.fsdp_config.optimizer_offload=False \
   actor_rollout_ref.rollout.temperature=$TEMPERATURE \
   actor_rollout_ref.rollout.swap_space=2 \
   actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=$LOG_PROB_MICRO_BATCH_SIZE \
@@ -241,7 +309,12 @@ ray job submit --address=${HEAD_IP}:${HEAD_PORT} \
   actor_rollout_ref.rollout.max_num_batched_tokens=$max_num_batched_tokens \
   actor_rollout_ref.rollout.micro_rollout_batch_size=$MICRO_ROLLOUT_BATCH_SIZE \
   actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=$LOG_PROB_MICRO_BATCH_SIZE \
+  actor_rollout_ref.rollout.dtype=bfloat16 \
   actor_rollout_ref.ref.fsdp_config.param_offload=True \
+  actor_rollout_ref.actor.fsdp_config.param_offload=True\
+  actor_rollout_ref.actor.fsdp_config.grad_offload=True \
+  actor_rollout_ref.actor.fsdp_config.optimizer_offload=False \
+  actor_rollout_ref.model.enable_gradient_checkpointing=True \
   algorithm.kl_ctrl.kl_coef=$KL_COEF \
   critic.ppo_micro_batch_size_per_gpu=$PPO_MICRO_BATCH_SIZE \
   trainer.critic_warmup=0 \
@@ -254,6 +327,12 @@ ray job submit --address=${HEAD_IP}:${HEAD_PORT} \
   trainer.remove_clip=$REMOVE_CLIP \
   trainer.save_freq=$SAVE_FREQ \
   trainer.test_freq=$TEST_FREQ \
-  trainer.default_local_dir=$HDFS_CHECKPOINT_PATH/${RUN_NAME}_${EXP_NAME} \
-  trainer.total_epochs=$TOTAL_EPOCHS 2>&1 | tee -a $LOG_FILE_PATH \
-  actor_rollout_ref.rollout.dtype=bfloat16 
+  trainer.default_local_dir=$HDFS_CHECKPOINT_PATH/$FINAL_RUN_NAME \
+  "${HYDRA_OVERRIDES[@]}" \
+  trainer.val_before_train=$VAL_BEFORE_TRAIN \
+  trainer.val_sample_size=$VAL_SAMPLE_SIZE \
+  calculator.diff_stride=$DIFF_STRIDE \
+  calculator.enable=$ENABLE_CALCULATOR \
+  trainer.total_epochs=$TOTAL_EPOCHS 2>&1 | tee -a $LOG_FILE_PATH 
+
+  

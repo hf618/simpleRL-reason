@@ -119,7 +119,7 @@ class Worker(Worker):
             is_driver_worker=is_driver_worker,
             prompt_adapter_config=prompt_adapter_config,
             multimodal_config=multimodal_config,
-            return_hidden_states=True,
+            return_hidden_states=True, # # <--- 仅在 draft_model_config 是 mlp_speculator 时才需要
             **speculative_args,
         )
 
