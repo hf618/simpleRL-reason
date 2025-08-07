@@ -201,7 +201,7 @@ class LLM(LLM):
         # This is necessary because some requests may be finished earlier than
         # its previous requests.
         outputs = sorted(outputs, key=lambda x: int(x.request_id))
-        # breakpoint()
+        
         return self._post_process_outputs(outputs)
 
     # # NOTE(shengguangming): add for verl
@@ -215,9 +215,11 @@ class LLM(LLM):
 
     # NOTE(shengguangming): add for verl
     def _post_process_outputs(self, request_outputs: List[RequestOutput]) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+ 
         output_token_ids = []
         logprobs = []
-        hidden_state_list = []
+        hidden_states_decode_list = []
+        hidden_states_prefill_list = []
         for request_output in request_outputs:  # List[RequestOutput]
             outputs = request_output.outputs
             for output in outputs:  # List[CompletionOutput], usually len == 1
@@ -229,18 +231,35 @@ class LLM(LLM):
                     for logprobs_dict, id in zip(logprobs_dicts, output.token_ids):
                         logprob.append(logprobs_dict[id].logprob)
                     logprobs.append(torch.tensor(logprob))
-            for hidden_state in request_output.hidden_states:
-                hidden_state_list.append(hidden_state)
+                    
+    
+            # 处理 hidden_states, 依次装入 hidden_states_decode_list 长度为 micro bs * rollouts n
+            if hasattr(request_output, 'hidden_states_decode') and request_output.hidden_states_decode is not None:
+                for hidden_state in request_output.hidden_states_decode:
+                    hidden_states_decode_list.append(hidden_state)
+            # 处理 hidden_states_prefill，依次装入 hidden_states_prefill_list 长度为 micro bs
+            if hasattr(request_output, 'hidden_states_prefill') and request_output.hidden_states_prefill is not None:
+                for hidden_state in request_output.hidden_states_prefill:
+                    hidden_states_prefill_list.append(hidden_state)
+
         pad_token_id = self.llm_engine.tokenizer.pad_token_id if self.llm_engine.tokenizer.pad_token_id is not None else self.llm_engine.tokenizer.eos_token_id
         output_token_ids = pad_sequence(output_token_ids, batch_first=True, padding_value=pad_token_id)
         if len(logprobs) > 0:
             logprobs = pad_sequence(logprobs, batch_first=True, padding_value=pad_token_id)
         
-        if len(hidden_state_list) > 0:
-           hidden_states = pad_sequence(hidden_state_list, batch_first=True, padding_value=pad_token_id)  # 原本 padding_value=pad_token_id 我现在换成 0
+        # 处理 hidden_states_decode, m个prompt有n*m个rollouts, 需要右填充, (micro bs * rollouts n, pad max 1, layers, feat_dim)
+        if len(hidden_states_decode_list) > 0:
+            hidden_states_decode = pad_sequence(hidden_states_decode_list, batch_first=True, padding_value=pad_token_id)  # 原本 padding_value=pad_token_id 我现在换成 0
         else:
-            hidden_states = None
-        return output_token_ids, logprobs, hidden_states
+            hidden_states_decode = None
+   
+        # 处理 hidden_states_prefill, 一个prompt只有一个 无需预padding (之前已经pad)， (micro bs, pad max 2, layers, feat_dim)
+        if len(hidden_states_prefill_list) > 0:
+            hidden_states_prefill = torch.stack(hidden_states_prefill_list, dim=0)
+        else:
+            hidden_states_prefill = None
+
+        return output_token_ids, logprobs, hidden_states_decode, hidden_states_prefill
 
     def sync_model_weights(self, actor_weights: Dict[str, torch.Tensor], load_format: str) -> None:
         self.llm_engine.sync_model_weights(actor_weights=actor_weights, load_format=load_format)

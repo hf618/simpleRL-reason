@@ -125,3 +125,4 @@ model_scope_model
 
 # 忽略 custom 目录
 /custom/
+/wandb_my/

@@ -41,6 +41,10 @@ metrics_to_calc=""
 metric_stride=1
 num_test_sample_per_dataset=-1  # 默认值
 dtype="torch.float16"
+run_collect_results="true"
+gpu_memory_utilization=1.0
+
+
 while [[ $# -gt 0 ]]; do
     case $1 in
         --run_name)
@@ -141,6 +145,14 @@ while [[ $# -gt 0 ]]; do
             ;;
         --dtype)
             dtype="$2"
+            shift 2
+            ;;
+        --run_collect_results) 
+            run_collect_results="$2"
+            shift 2
+            ;;
+        --gpu_memory_utilization)
+            gpu_memory_utilization="$2"
             shift 2
             ;;
         *)
@@ -272,7 +284,8 @@ if [ "$just_wandb" != "true" ]; then
     "$metric_stride" \
     "$metric_orders" \
     "$num_test_sample_per_dataset" \
-    "$dtype"
+    "$dtype" \
+    "$gpu_memory_utilization"
 fi
 
 WANDB_FLAG="" # <--- (新增) 创建一个空变量
@@ -280,12 +293,17 @@ if [ "$use_wandb_arg" = "true" ]; then # <--- (新增) 判断条件
     WANDB_FLAG="--use_wandb"
 fi
 
-python sh/collect_results.py \
-    --base_dir "$base_checkpoint_path/$output_dir" \
-    --model_name $init_model_path \
-    --wandb_project "verl_math_eval_gpugeek" \
-    --wandb_api_key "${WANDB_API_KEY}" \
-    --wandb_run_name $RUN_NAME \
-    --temperature $temperature \
-    --benchmarks $benchmarks \
-    ${WANDB_FLAG} # <--- (新增) 使用我们刚创建的变量
+if [ "$run_collect_results" = "true" ]; then
+    echo "Running collect_results.py to aggregate and plot results..."
+    python sh/collect_results.py \
+        --base_dir "$base_checkpoint_path/$output_dir" \
+        --model_name $init_model_path \
+        --wandb_project "verl_math_eval_gpugeek" \
+        --wandb_api_key "${WANDB_API_KEY}" \
+        --wandb_run_name $RUN_NAME \
+        --temperature $temperature \
+        --benchmarks $benchmarks \
+        ${WANDB_FLAG}
+else
+    echo "Skipping result collection and plotting as requested by the 'run_collect_results' flag."
+fi

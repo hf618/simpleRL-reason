@@ -2,8 +2,8 @@
 set -x
 
 # 参数检查
-if [ "$#" -gt 20 ]; then # 增加参数个数检查
-    echo "Usage: $0 <eval_script_path> <base_checkpoint_path> <init_model_path> <template> [benchmarks] [temperature] [max_tokens] [top_p] [tp_size] [ckpt_list_file] [output_dir] [overwrite] [n_sampling] [visible_gpus] [calculate_metrics] [metrics_to_calc] [metric_stride] [metric_orders] [num_test_sample_per_dataset] [dtype]"
+if [ "$#" -gt 21 ]; then 
+    echo "Usage: $0 <eval_script_path> <base_checkpoint_path> <init_model_path> <template> [benchmarks] [temperature] [max_tokens] [top_p] [tp_size] [ckpt_list_file] [output_dir] [overwrite] [n_sampling] [visible_gpus] [calculate_metrics] [metrics_to_calc] [metric_stride] [metric_orders] [num_test_sample_per_dataset] [dtype] [gpu_memory_utilization]"
     exit 1
 fi
 
@@ -32,6 +32,7 @@ metric_stride=${17:-1}
 metric_orders=${18:-"0,1,2"}
 num_test_sample_per_dataset=${19:--1}  # 默认值为 -1，表示使用所有样本
 dtype=${20:-"torch.float16"}
+gpu_memory_utilization=${21:-1.0}
 # visible_gpus=${14:-""} 
 # # 设置可见的 GPU
 # if [ -n "$visible_gpus" ]; then
@@ -144,6 +145,8 @@ process_checkpoint() {
     
     ckpt_path="$base_checkpoint_path/$step_tag/$actor_dir/huggingface"
     
+    local port=29501
+
     echo "Evaluating checkpoint $step_tag on GPUs $gpu_ids" >&2
     
     output_path_new="$base_checkpoint_path/$output_dir/$step_tag"
@@ -153,7 +156,7 @@ process_checkpoint() {
         ${template} "$ckpt_path" "$output_path_new" "$temperature" \
         "$max_tokens" "$top_p" "$benchmarks" "$overwrite" "$n_sampling" \
         "$calculate_metrics" "$metrics_to_calc" "$metric_stride" "$metric_orders" "$num_test_sample_per_dataset" \
-        "$dtype" 
+        "$dtype" "$gpu_memory_utilization"
 
 
 }

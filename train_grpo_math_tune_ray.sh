@@ -2,42 +2,44 @@
 
 USER_ENV=`whoami`
 set -x
+FULL_ARGS="$@"
 # export NCCL_DEBUG=DEBUG
 export RAY_BACKEND_LOG_LEVEL=debug
 export RAY_DEDUP_LOGS=1
 
 
-export PROJECT_NAME=verl_train_gpugeek
+export PROJECT_NAME=verl_train_gong
 export WANDB_API_KEY=8c84ddd422687515e5df25109f349a4f2c5df884
 export WANDB_OFFICIAL=1
 export VLLM_ATTENTION_BACKEND=FLASH_ATTN # FLASHINFER # XFORMERS
-export HDFS_DATA_PATH=/gz-data/custom/data
-export HDFS_MODEL_PATH=/gz-data/Models/qwen
-export HDFS_CHECKPOINT_PATH=/gz-data/custom/checkpoint
-export HDFS_LOG_PATH=/gz-data/custom/log
+export HDFS_DATA_PATH=/home/root1/Fanding/simpleRL-reason/custom/data
+export HDFS_MODEL_PATH=/media/root1/4t/Models
+export HDFS_CHECKPOINT_PATH=/home/root1/Fanding/simpleRL-reason/custom/checkpoint
+export HDFS_LOG_PATH=/home/root1/Fanding/simpleRL-reason/custom/log
 export RUN_NAME=verl-grpo
 export ARNOLD_WORKER_NUM=1 # number of nodes you want to use 
 
 export RAY_OVERRIDE_JOB_RUNTIME_ENV=1
 export CUDA_LAUNCH_BLOCKING=1  # 同步CUDA错误
 export NCCL_DEBUG=INFO          # 启用NCCL详细日志
-export NCCL_SOCKET_IFNAME=eth0 # 指定网卡（根据ifconfig替换）
-# export LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/usr/local/cuda-12.6/lib64:$LD_LIBRARY_PATH
-# export LD_LIBRARY_PATH=$HOME/.local/lib:/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH
-# export LD_PRELOAD=$HOME/.local/lib/libcuda.so
+export NCCL_SOCKET_IFNAME=enp2s0 # 指定网卡（根据ifconfig替换）
+
 export RAY_pickling_fallback="True"
 export PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python
 
+export CUDA_VISIBLE_DEVICES="0,1"  # 只使用 GPU 0 和 1
 export RAY_DEBUG=legacy
 export REWORD_FUNCTION_TYPE="independent"
-# n这三个平凡更换
-export CUDA_VISIBLE_DEVICES="0,1,2,3"  # 只使用 GPU 0 和 1
-NUM_GPUS=4
-HEAD_PORT="6379" # 注意更换 6379
+export TORCH_USE_CUDA_DSA=1
+export NCCL_DEBUG=INFO
+export TORCH_DISTRIBUTED_DEBUG=DETAIL
+
 
 WORKING_DIR="."
-HEAD_IP="172.17.0.2" # 注意更换为你的 head ip
-
+NUM_GPUS=2
+HEAD_IP="219.223.186.53"
+HEAD_PORT="6379"
+DATASET_NAME=simplelr_qwen_level1to4
 
 # Default values
 TRAIN_BATCH_SIZE=64
@@ -71,8 +73,8 @@ REMOVE_PREVIOUS_CKPT=False
 REWARD_EMA_ALPHA=""
 REWARD_INDICATOR_NAMES=""
 REWARD_WEIGHTS=""
-REWARD_WEIGHTS_INNER=""
-
+REWARD_WEIGHTS_EXPLOIT=""
+METRIC_INDICES="[0,1,2]" # 默认指标索引
 # <<< 修改点 1: 将 HYDRA_OVERRIDES 初始化为数组 >>>
 HYDRA_OVERRIDES=()
 VAL_BEFORE_TRAIN=True
@@ -81,7 +83,12 @@ ENABLE_CALCULATOR=True
 DIFF_STRIDE=20
 ADD_REWARD=True
 COMPUTE_LOG_EFFECTIVE_RANK=False
-
+MODULATION_GAIN=1.5
+OUTPUT_TOKEN_LEVEL_METRICS=False
+ADV_ESTIMATOR="grpo"
+CRITIC_MODEL_PATH=""
+AUX_REWARD_GLOBAL_WEIGHT=1.0 
+TOKEN_LEVEL_BASELINE_TYPE="internal_mean" 
 generate_suffix() {
   local suffix=""
   local dataset_provided=false
@@ -114,6 +121,11 @@ generate_suffix() {
       --logger_config) LOGGER_CONFIG="$2"; shift 2 ;;
       --exp_name) EXP_NAME="$2"; shift 2 ;;
       --diff_stride) suffix+="_stride$2"; shift 2 ;;
+      --reward_ema_alpha) suffix+="_ema$2"; shift 2 ;;
+      --modulation_gain) suffix+="_mgain$2"; shift 2 ;;
+      --aux_reward_global_weight) suffix+="_auxgw$2"; shift 2 ;;
+      --adv_estimator) suffix+="_$2"; shift 2 ;;
+      --critic_model_path) shift 2 ;;
       *) shift ;;
     esac
   done
@@ -175,14 +187,20 @@ while [[ "$#" -gt 0 ]]; do
     --reward_ema_alpha) REWARD_EMA_ALPHA="$2"; shift 2 ;;
     --reward_indicator_names) REWARD_INDICATOR_NAMES="$2"; shift 2 ;;
     --reward_weights) REWARD_WEIGHTS="$2"; shift 2 ;;
-    --reward_weights_inner) REWARD_WEIGHTS_INNER="$2"; shift 2 ;;
+    --reward_weights_exploit) REWARD_WEIGHTS_EXPLOIT="$2"; shift 2 ;;
     --val_before_train) VAL_BEFORE_TRAIN="$2"; shift 2 ;;
     --val_sample_size) VAL_SAMPLE_SIZE="$2"; shift 2 ;;
     --diff_stride) DIFF_STRIDE="$2"; shift 2 ;;
     --enable_calculator) ENABLE_CALCULATOR="$2"; shift 2 ;;
     --add_reward) ADD_REWARD="$2"; shift 2 ;;
     --compute_log_effective_rank) COMPUTE_LOG_EFFECTIVE_RANK="$2"; shift 2 ;;
-    # <<< 新增结束 >>>
+    --metric_indices) METRIC_INDICES="$2"; shift 2 ;;
+    --modulation_gain) MODULATION_GAIN="$2"; shift 2 ;;
+    --output_token_level_metrics) OUTPUT_TOKEN_LEVEL_METRICS="$2"; shift 2 ;;
+    --adv_estimator) ADV_ESTIMATOR="$2"; shift 2 ;;
+    --critic_model_path) CRITIC_MODEL_PATH="$2"; shift 2 ;;
+    --aux_reward_global_weight) AUX_REWARD_GLOBAL_WEIGHT="$2"; shift 2 ;;
+    --token_level_baseline_type) TOKEN_LEVEL_BASELINE_TYPE="$2"; shift 2 ;; 
     *)
       echo "Unknown option: $1"
       exit 1
@@ -190,7 +208,28 @@ while [[ "$#" -gt 0 ]]; do
   esac
 done
 
-
+if [[ "$ADV_ESTIMATOR" == "grpo" ]]; then
+  if [[ "$ROLLOUT_N" -le 1 ]]; then
+    echo "错误：当 adv_estimator 为 grpo 时, --rollout_n 必须大于 1."
+    exit 1
+  fi
+  if [[ -n "$CRITIC_MODEL_PATH" ]]; then
+    echo "警告：当 adv_estimator 为 grpo 时, --critic_model_path 将被忽略."
+    CRITIC_MODEL_PATH="" # 确保不传递
+  fi
+elif [[ "$ADV_ESTIMATOR" == "gae" ]]; then
+  if [[ "$ROLLOUT_N" -ne 1 ]]; then
+    echo "错误：当 adv_estimator 为 gae (PPO模式) 时, --rollout_n 必须等于 1."
+    exit 1
+  fi
+  if [[ -z "$CRITIC_MODEL_PATH" ]]; then
+    echo "错误：当 adv_estimator 为 gae (PPO模式) 时, 必须通过 --critic_model_path 提供 Critic 模型路径."
+    exit 1
+  fi
+else
+  echo "错误：无效的 adv_estimator: $ADV_ESTIMATOR. 请选择 'grpo' 或 'gae'."
+  exit 1
+fi
 # ... (End of argument parsing while loop)
 
 # Generate a unique suffix based on the input arguments (now without model name)
@@ -198,13 +237,31 @@ SUFFIX=$(generate_suffix "$@")
 
 # Construct the FINAL_RUN_NAME in the desired order: {model}_{exp}_{base}{suffix}
 # For example: Qwen2.5-3B_origin_verl-grpo_max_response1280...
+if [[ "$ADV_ESTIMATOR" == "gae" ]]; then
+  SUFFIX+="_critic-$(basename $CRITIC_MODEL_PATH)"
+fi
 FINAL_RUN_NAME="${MODEL_NAME}_${EXP_NAME}_${RUN_NAME}${SUFFIX}"
 
 # Update the log file path to use the new name
 LOG_FILE_PATH="$HDFS_LOG_PATH/$FINAL_RUN_NAME.log"
 # The EXP_NAME variable is now part of the FINAL_RUN_NAME
 
-# ... (echo statements)
+# 1. 定义本次运行的专属目录 (与 trainer.default_local_dir 一致)
+RUN_DIRECTORY="$HDFS_CHECKPOINT_PATH/$FINAL_RUN_NAME"
+
+# 2. 确保这个目录存在 (-p 会创建所有父目录且不会因目录已存在而报错)
+mkdir -p "$RUN_DIRECTORY"
+
+# 3. 定义参数日志文件的完整路径
+PARAMS_LOG_FILE="$RUN_DIRECTORY/hyperparameters.log"
+
+# 4. 将调用此脚本的完整命令和所有参数写入日志文件
+#    使用我们在一开始备份的 FULL_ARGS 变量，而不是已被消耗的 $@
+echo "bash $0 $FULL_ARGS" > "$PARAMS_LOG_FILE"
+
+echo "----------------------------------------------------"
+echo "超参数配置已保存到: $PARAMS_LOG_FILE"
+echo "----------------------------------------------------"
 
 
 echo "Training with the following parameters:"
@@ -245,8 +302,8 @@ fi
 if [ -n "$REWARD_WEIGHTS" ]; then
   HYDRA_OVERRIDES+=("reward_manager.weights=$REWARD_WEIGHTS")
 fi
-if [ -n "$REWARD_WEIGHTS_INNER" ]; then
-  HYDRA_OVERRIDES+=("reward_manager.weights_inner=$REWARD_WEIGHTS_INNER")
+if [ -n "$REWARD_WEIGHTS_EXPLOIT" ]; then
+  HYDRA_OVERRIDES+=("reward_manager.weights_exploit=$REWARD_WEIGHTS_EXPLOIT")
 fi
 if [ -n "$ADD_REWARD" ]; then
   HYDRA_OVERRIDES+=("reward_manager.add_reward=$ADD_REWARD")
@@ -254,8 +311,23 @@ fi
 if [ -n "$COMPUTE_LOG_EFFECTIVE_RANK" ]; then
   HYDRA_OVERRIDES+=("calculator.compute_log_effective_rank=$COMPUTE_LOG_EFFECTIVE_RANK")
 fi
-
-
+if [ -n "$METRIC_INDICES" ]; then
+  HYDRA_OVERRIDES+=("calculator.metric_indices=$METRIC_INDICES")
+fi
+if [ -n "$MODULATION_GAIN" ]; then
+  HYDRA_OVERRIDES+=("reward_manager.modulation_gain=$MODULATION_GAIN")
+fi
+if [ -n "$OUTPUT_TOKEN_LEVEL_METRICS" ]; then
+  HYDRA_OVERRIDES+=("calculator.output_token_level_metrics=$OUTPUT_TOKEN_LEVEL_METRICS")
+fi
+# --- 新增：传递 Critic 模型路径 (需求2) ---
+if [ -n "$CRITIC_MODEL_PATH" ]; then
+  HYDRA_OVERRIDES+=("critic.model.path=$CRITIC_MODEL_PATH")
+fi
+# v-- 在这里添加下面的代码块 --v
+if [ -n "$TOKEN_LEVEL_BASELINE_TYPE" ]; then
+  HYDRA_OVERRIDES+=("reward_manager.token_level_baseline_type=$TOKEN_LEVEL_BASELINE_TYPE")
+fi
 ray job submit --address=${HEAD_IP}:${HEAD_PORT} \
   --entrypoint-num-cpus=1 \
   --runtime-env-json='{
@@ -266,7 +338,7 @@ ray job submit --address=${HEAD_IP}:${HEAD_PORT} \
           "/custom/checkpoint/",
           "/custom/log/",
           "/custom/data/",
-          "/root/simpleRL-reason/examples/simplelr_math_eval/data/tabmwp/test.jsonl"
+          "/home/root1/Fanding/simpleRL-reason/examples/simplelr_math_eval/data/tabmwp/test.jsonl"
         ],
         "env_vars": {
           "http_proxy": "",
@@ -274,7 +346,7 @@ ray job submit --address=${HEAD_IP}:${HEAD_PORT} \
           "WANDB_API_KEY": "8c84ddd422687515e5df25109f349a4f2c5df884",
           "CUDA_LAUNCH_BLOCKING": "1",
           "NCCL_DEBUG": "INFO",
-          "NCCL_SOCKET_IFNAME": "eth0",
+          "NCCL_SOCKET_IFNAME": "enp2s0",
           "RAY_OVERRIDE_JOB_RUNTIME_ENV": "1",
           "REWORD_FUNCTION_TYPE": "independent",
           "RAY_DEBUG": "legacy"

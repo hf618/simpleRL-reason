@@ -166,6 +166,67 @@ class vLLMRollout(BaseRollout):
         for key, value in old_sampling_params_args.items():
             setattr(self.sampling_params, key, value)
 
+
+    def _build_final_batch(
+        self,
+        idx: torch.Tensor,
+        response: torch.Tensor,
+        seq: torch.Tensor,
+        attention_mask: torch.Tensor,
+        position_ids: torch.Tensor,
+        hidden_states_decode: torch.Tensor | None,
+        hidden_states_prefill: torch.Tensor | None,
+        batch_size: int,
+    ) -> TensorDict:
+        """
+        根据生成的数据和隐藏状态，构建最终的批次 TensorDict。
+        此方法将创建批次的核心逻辑封装起来，以提高可读性。
+
+        Args:
+            idx: 提示的 token ID。
+            response: 生成的响应的 token ID。
+            seq: 提示和响应拼接后的完整 token ID。
+            attention_mask: 完整的注意力掩码。
+            position_ids: 完整的位置 ID。
+            hidden_states_decode: 解码阶段的隐藏状态 (可能为 None)。
+            hidden_states_prefill: 预填充阶段的隐藏状态 (可能为 None)。
+            batch_size: 最终的批次大小 (可能因 n > 1 而扩大)。
+
+        Returns:
+            一个包含所有数据的 TensorDict。
+        """
+        # 1. 创建包含所有情况下都存在的基础字段的字典
+        final_data = {
+            'prompts': idx,
+            'responses': response,
+            'input_ids': seq,
+            'attention_mask': attention_mask,
+            'position_ids': position_ids,
+        }
+        
+        # 2. 如果存在，则添加解码阶段的隐藏状态
+        if hidden_states_decode is not None:
+            final_data['hidden_states_decode'] = hidden_states_decode
+
+        # 3. 如果存在，则添加预填充阶段的隐藏状态
+        if hidden_states_prefill is not None:
+            # 当 n > 1 时，解码批次大小 (batch_size) 会扩大，
+            # 而预填充批次大小保持不变。此时需要对预填充数据进行扩展以匹配。
+            if hidden_states_prefill.shape[0] != batch_size:
+                # 原始批次大小
+                original_batch_size = batch_size // self.config.n
+                # 创建一个索引来重复 prefill 数据
+                repeat_indices = torch.arange(original_batch_size, device=hidden_states_prefill.device).repeat_interleave(self.config.n)
+                # 使用索引扩展 prefill hidden states
+                final_data['hidden_states_prefill'] = hidden_states_prefill[repeat_indices]
+            else:
+                # 如果批次大小匹配，直接使用
+                final_data['hidden_states_prefill'] = hidden_states_prefill
+        
+        # 4. 使用构建好的字典创建并返回 TensorDict
+        return TensorDict(final_data, batch_size=batch_size)
+
+
     @torch.no_grad()
     def generate_sequences(self, prompts: DataProto, **kwargs) -> DataProto:
         # rebuild vllm cache engine
@@ -199,10 +260,12 @@ class vLLMRollout(BaseRollout):
             }
         MICRO_ROLLOUT_BATCH_SIZE = self.config.micro_rollout_batch_size
         # outputs = []
-        # breakpoint()
+        #  
+        
         responses_list = []
         log_probs_list = []
-        hidden_states_list = []
+        hidden_states_decode_list = []
+        hidden_states_prefill_list = []
         # users can customize different sampling_params at different run
         with self.update_sampling_params(**kwargs):
             for i in range(0, batch_size, MICRO_ROLLOUT_BATCH_SIZE):
@@ -216,30 +279,64 @@ class vLLMRollout(BaseRollout):
                 # outputs.append(output)
                 responses_list.append(output[0])
                 log_probs_list.append(output[1])
-                hidden_states_list.append(output[2])
-        # breakpoint()
+                if output[2].numel() > 0:
+                    hidden_states_decode_list.append(output[2])
+                if output[3] is not None:
+                     hidden_states_prefill_list.append(output[3])
+        
+        # hidden_states_prefill_list[0].shape
+        # torch.Size([66, 896])
+        # hidden_states_list[0].shape
+        # torch.Size([4, 236, 1, 896])
+                
+        #  
         # TODO(sgm): disable logprob when recompute_log_prob is enable
         # if n = 1: (bs, response_length) ; if n > 1: (bs * n, response_length)
         # response = torch.cat(responses, dim=0).to(idx.device)
         # log_probs = torch.cat(log_probs, dim=0).to(idx.device)
         new_responses_list = []
         new_log_probs_list = []
-        new_hidden_states_list = []
+        new_hidden_states_decode_list = []
+        new_hidden_states_prefill_list = []
         for i in range(len(responses_list)):
             if responses_list[i].shape[1] < self.config.response_length:
-                response = pad_sequence_to_length(responses_list[i], self.config.response_length, self.pad_token_id)
+                response_ = pad_sequence_to_length(responses_list[i], self.config.response_length, self.pad_token_id)
+                new_responses_list.append(response_)
                 # log_probs = pad_sequence_to_length(log_probs_list[i], self.config.response_length, self.pad_token_id)
-                hidden_states = pad_4d_tensor(hidden_states_list[i], self.config.response_length, self.pad_token_id) # 这里我就改成0了
-                new_responses_list.append(response)
-                # new_log_probs_list.append(log_probs)
-                new_hidden_states_list.append(hidden_states)
+                # new_log_probs_list.append(log_probs)  
+
             else:
                 new_responses_list.append(responses_list[i])
                 # new_log_probs_list.append(log_probs_list[i])
-                new_hidden_states_list.append(hidden_states_list[i])
+                
+            
+            if len(hidden_states_decode_list) > 0:
+                if hidden_states_decode_list[i].shape[1] < self.config.response_length:
+                    hidden_states_decode_ = pad_4d_tensor(hidden_states_decode_list[i], self.config.response_length, self.pad_token_id, left_pad=False) # right pad
+                    new_hidden_states_decode_list.append(hidden_states_decode_)
+                else:
+                    new_hidden_states_decode_list.append(hidden_states_decode_list[i])
+
+            if len(hidden_states_prefill_list) > 0:
+                if hidden_states_prefill_list[i].shape[1] < self.config.prompt_length:
+                    hidden_states_prefill_ = pad_4d_tensor(hidden_states_prefill_list[i], self.config.prompt_length, self.pad_token_id, left_pad=True) # left pad
+                    new_hidden_states_prefill_list.append(hidden_states_prefill_)
+                else:
+                    new_hidden_states_prefill_list.append(hidden_states_prefill_list[i])
+    
         response = torch.cat(new_responses_list, dim=0).to(idx.device)
         # log_probs = torch.cat(new_log_probs_list, dim=0).to(idx.device)
-        hidden_states = torch.cat(new_hidden_states_list, dim=0).to(idx.device)
+
+        if len(new_hidden_states_decode_list) > 0:
+            hidden_states_decode = torch.cat(new_hidden_states_decode_list, dim=0).to(idx.device)
+        else:
+            hidden_states_decode = None
+
+        if len(new_hidden_states_prefill_list) > 0:
+            hidden_states_prefill = torch.cat(new_hidden_states_prefill_list, dim=0).to(idx.device)
+        else:
+            hidden_states_prefill = None
+
         if self.config.n > 1 and do_sample:
             idx = idx.repeat_interleave(self.config.n, dim=0)
             attention_mask = attention_mask.repeat_interleave(self.config.n, dim=0)
@@ -258,23 +355,29 @@ class vLLMRollout(BaseRollout):
         response_position_ids = position_ids[:, -1:] + delta_position_id
         position_ids = torch.cat([position_ids, response_position_ids], dim=-1)
         response_attention_mask = get_eos_mask(response_id=response, eos_token=eos_token_id, dtype=attention_mask.dtype)
+        prompt_attention_mask = attention_mask
         attention_mask = torch.cat((attention_mask, response_attention_mask), dim=-1)
+        
 
-        # all the tp ranks should contain the same data here. data in all ranks are valid
-        batch = TensorDict(
-            {
-                'prompts': idx,
-                'responses': response,
-                'input_ids': seq,  # here input_ids become the whole sentences
-                # 'old_log_probs': log_probs, # we will recompute old log prob with actor
-                'attention_mask': attention_mask,
-                'position_ids': position_ids,
-                'hidden_states': hidden_states,
-            },
-            batch_size=batch_size)
+        # 这部分代码是之前冗长的 if/elif/else 结构
+        # 现在，我们用一个函数调用来替代它
+        merged_batch = self._build_final_batch(
+            idx=idx,
+            response=response,
+            seq=seq,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            hidden_states_decode=hidden_states_decode,
+            hidden_states_prefill=hidden_states_prefill,
+            batch_size=batch_size,
+        )
 
         # free vllm cache engine
         if self.config.free_cache_engine:
             self.inference_engine.free_cache_engine()
-        # breakpoint()
-        return DataProto(batch=batch)
+        #  这儿改成返合并
+        
+        return DataProto(batch=merged_batch)
+    
+
+    

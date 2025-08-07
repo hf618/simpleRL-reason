@@ -85,6 +85,21 @@ class ModelRunner(ModelRunner):
         # NOTE(sgm): add for verl
         self.model = model  # this will be replaced by get_model()
 
+        # 这一步为了获取padding token id
+        # Load tokenizer and get pad_token_id
+        try:
+            from transformers import AutoTokenizer
+            tokenizer = AutoTokenizer.from_pretrained(
+                self.model_config.tokenizer,
+                trust_remote_code=True
+            )
+            self.pad_token_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else 0
+        except Exception as e:
+            logger.warning(f"Failed to load tokenizer: {e}. Using default pad_token_id=0")
+            self.pad_token_id = 0
+
+
+
     # NOTE(sgm): initialize model using the actor model
     def load_model(self) -> None:
         logger.info("Starting to load model %s...", self.model_config.model)

@@ -68,6 +68,8 @@ def parse_args():
                         default=-1,  # -1 表示使用所有样本
                         help="Number of test samples per dataset to use for debugging")
     parser.add_argument("--dtype", default="torch.float16", type=str, help="Data type for the model (e.g., 'torch.float16', 'torch.bfloat16', 'auto')")
+    parser.add_argument("--gpu_memory_utilization", type=float, default=0.6, help="The fraction of GPU memory to be used by the vLLM engine. 1.0 means use all available memory.")
+    
     args = parser.parse_args()
     args.top_p = (
         1 if args.temperature == 0 else args.top_p
@@ -189,7 +191,8 @@ def setup(args):
             trust_remote_code=True,
             dtype=model_dtype,
             enforce_eager=True,
-            enable_chunked_prefill=False
+            enable_chunked_prefill=False,
+            gpu_memory_utilization=args.gpu_memory_utilization
         )
         tokenizer = None
         if args.apply_chat_template:
@@ -397,7 +400,7 @@ def main(llm, tokenizer, data_name, args):
             # outputs = [
             #     (output.outputs[0].text, output.outputs[0].finish_reason)
             #     for output in outputs
-            # breakpoint()
+            #  
         else:
             outputs_text = generate_completions(
                 model=llm,

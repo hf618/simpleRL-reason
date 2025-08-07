@@ -14,7 +14,6 @@
 """
 Note that we don't combine the main with ray_trainer as ray_trainer is used by other main.
 """
-
 from verl import DataProto
 import torch
 from verl.utils.reward_score import gsm8k, math
@@ -61,42 +60,54 @@ def _custom_compute_score(data_source, solution_str, ground_truth):
         raise NotImplementedError
 
 
-class RewardManager():
-    """The reward manager.
-    """
 
-    # <<< 修改 RewardManager 的 __init__ 方法 >>>
-    def __init__(self, tokenizer, num_examine, compute_score=None, calculator=None, 
-                 ema_alpha=0.7, 
-                 indicator_names=None, 
-                 weights=None, 
-                 weights_inner=None,
+class RewardManager():
+    """
+    Optimized version based on the user's final request:
+    1. Uses the nuanced 'score' for both the direct reward (reward_tensor_0)
+       and for updating the performance EMA that controls the global scaling factor.
+    2. Includes normalization to handle the [-1, 1] range of the score.
+    """
+    def __init__(self, tokenizer, num_examine, compute_score=None, calculator=None,
+                 ema_alpha=0.7,
+                 indicator_names=None,
+                 weights=None,
+                 weights_exploit=None,
                  calculator_enabled=True,
-                 add_reward=True) -> None: # <-- Parámetro añadido
+                 add_reward=True,
+                 modulation_gain=1.5,
+                 aux_reward_global_weight=1.0,
+                 adv_estimator='grpo',
+                 output_token_level_metrics=False,
+                 token_level_baseline_type='internal_mean'):
         self.tokenizer = tokenizer
-        self.num_examine = num_examine  # the number of batches of decoded responses to print to the console
+        self.num_examine = num_examine
         self.compute_score = compute_score or _default_compute_score
         self.calculator = calculator
         self.ema_alpha = ema_alpha
-        
-        # Use provided lists or fall back to defaults
         self.indicator_names = indicator_names if indicator_names is not None else \
-            ['Response Entropy 1 diff 2', 'Response Entropy 1 diff', 'Response Entropy 1']
+            ['Effective Rank diff 2', 'Effective Rank diff', 'Effective Rank']
         
-        self.weights = weights if weights is not None else \
-            [1, 1 / 4, 1 / 16]
-            
-        self.weights_inner = weights_inner if weights_inner is not None else \
-            [1.0, 1e-2, 1e-3]
+        self.weights_explore = weights if weights is not None else [0.0, 0.0, 1.0]
+        self.weights_exploit = weights_exploit if weights_exploit is not None else [0.0, 1.0, 0.0]
 
         self.mids = {name: 0.0 for name in self.indicator_names}
-
         self.add_reward = add_reward
-        self.calculator_enabled = calculator_enabled # <-- 保存这个标志
-    # <<< 修改结束 >>>
+        self.calculator_enabled = calculator_enabled
+        self.modulation_gain = modulation_gain
+        self.epsilon = 1e-8
+        
+        # ### MODIFIED: Tracks the EMA of the nuanced score ###
+        # Initialized to 0.0, representing a neutral average score.
+        self.ema_performance_score = 0.0 
+        self.aux_reward_global_weight = aux_reward_global_weight
+        self.adv_estimator = adv_estimator
+        self.output_token_level_metrics = output_token_level_metrics
+        self.token_level_baseline_type = token_level_baseline_type
+        print(f"[RewardManager] Initialized with token-level baseline type: {self.token_level_baseline_type}")
         
 
-    def __call__(self, data: DataProto, is_val=False, metrics_old=None):
+    def __call__(self, data: DataProto, is_val=False, metrics_old=None, global_step=None):
         """We will expand this function gradually based on the available datasets"""
 
         # If there is rm score, we directly return rm score. Otherwise, we compute via rm_score_fn
@@ -110,20 +121,49 @@ class RewardManager():
         correctness_tensor = torch.zeros(len(data), dtype=torch.bfloat16)
         calculator_tensor = torch.zeros(len(data), dtype=torch.bfloat16)
         already_print_data_sources = {}
- 
-        # sigmoid = nn.Sigmoid()
+
+        # ### 新增: 初始化用于存储内部指标的字典 ###
+        internal_metrics = {
+            'percentage_deviation': [],
+            'exploit_tendency': [],
+            'performance_scaling_factor': []
+            # 其他指标将在循环中动态添加
+        }
         layer_key = '1'
-        if self.add_reward and self.calculator_enabled:
-            act_func = nn.Tanh()
-            for i in range(len(self.indicator_names)):
-                indicator_name = self.indicator_names[i]
-                # 关键修改：增加一层对特定键是否存在的检查
-                metric_key = f'cal/overall/layer_{layer_key}/{indicator_name}/mean'
-                if metrics_old and metric_key in metrics_old:
-                    v = metrics_old[metric_key]
-                    self.mids[indicator_name] = ( 1 - self.ema_alpha ) * self.mids[indicator_name] +  self.ema_alpha * v
+        # ### NEW: Main gatekeeper for auxiliary reward ###
+        # It's only possible to calculate if it's enabled AND it's not the first step (metrics_old exists).
+        use_aux_reward = self.add_reward and self.calculator_enabled and metrics_old
 
+        performance_scaling_factor = 1.0 # Default scaling factor for step 1
 
+        # # sigmoid = nn.Sigmoid()
+        # layer_key = '1'
+        # if use_aux_reward:
+        #     act_func = nn.Tanh()
+        #     for i in range(len(self.indicator_names)):
+        #         indicator_name = self.indicator_names[i]
+        #         # 关键修改：增加一层对特定键是否存在的检查
+        #         metric_key = f'cal/overall/layer_{layer_key}/{indicator_name}/mean'
+        #         if metrics_old and metric_key in metrics_old:
+        #             v = metrics_old[metric_key]
+        #             self.mids[indicator_name] = ( 1 - self.ema_alpha ) * self.mids[indicator_name] +  self.ema_alpha * v
+
+        #     # ### KEY ADJUSTMENT: NORMALIZATION ###
+        #     # 1. Normalize the performance score EMA (from [-1, 1]) to [0, 1]
+        #     normalized_performance = (self.ema_performance_score + 1.0) / 2.0
+            
+        #     # 2. Calculate the final scaling factor based on the normalized score
+        #     performance_scaling_factor = self.aux_reward_global_weight * (1.0 - normalized_performance)
+        act_func = nn.Tanh() if use_aux_reward else None
+
+        # ### 修改点1: EMA更新逻辑已移至末尾，此处不再需要 ###
+        if use_aux_reward:
+            # 仅计算用于当前步骤的缩放因子
+            normalized_performance = (self.ema_performance_score + 1.0) / 2.0
+            performance_scaling_factor = self.aux_reward_global_weight * (1.0 - normalized_performance)
+            internal_metrics['performance_scaling_factor'].append(performance_scaling_factor)
+
+     
         
         for i in range(len(data)):
             data_item = data[i]  # DataProtoItem
@@ -148,11 +188,7 @@ class RewardManager():
 
             data_source = data_item.non_tensor_batch['data_source']
 
-            score_dict = self.compute_score(
-                data_source=data_source,
-                solution_str=sequences_str,
-                ground_truth=ground_truth,
-            )
+            score_dict = self.compute_score(data_source=data_source, solution_str=sequences_str, ground_truth=ground_truth)
             reward_tensor_0[i, valid_response_length - 1] = score_dict['score']
             correctness_tensor[i] = score_dict['correctness']
 
@@ -163,30 +199,135 @@ class RewardManager():
                 already_print_data_sources[data_source] += 1
                 print(sequences_str)    
 
-            # 算一个辅助的 reward
-            if self.add_reward and self.calculator_enabled:
-                calculator_tensor[i] = 0.0  # 显式清零
-                for j in range(len(self.indicator_names)):
-                    indicator_name = self.indicator_names[j]
-                    original_indicator = data_item.batch['calculator_results'][layer_key][indicator_name] 
+
+
+            reward_tensor[i, valid_response_length - 1] = reward_tensor_0[i, valid_response_length - 1]
+
+            if use_aux_reward:
+                # 1. Calculate the 'Percentage Deviation' as the guidance signal
+                guidance_indicator_name = self.indicator_names[0] # Diff 2
+                current_guidance_value = data_item.batch['calculator_results'][layer_key][guidance_indicator_name]
+                ema_baseline = self.mids[guidance_indicator_name]
+                
+                percentage_deviation = (current_guidance_value - ema_baseline) / (abs(ema_baseline) + self.epsilon)
+                
+                # We can still clamp this to prevent extreme values from having too much influence
+                percentage_deviation = torch.clamp(percentage_deviation, -5.0, 5.0)
+
+
+                
+                # 3. Interpolate between explore and exploit weight profiles
+                w_explore = torch.tensor(self.weights_explore, device=data.batch.device)
+                w_exploit = torch.tensor(self.weights_exploit, device=data.batch.device)
+
+
+                # --- 实验一：测试假说A (高diff 2 = 利用) ---
+                # 变量名清晰地反映了它的作用
+                exploit_tendency = torch.sigmoid(self.modulation_gain * percentage_deviation)
+                # 当exploit_tendency趋近1时，权重偏向w_exploit
+                dynamic_weights = (1.0 - exploit_tendency) * w_explore +  exploit_tendency * w_exploit
+
+
+                # # --- 实验二：测试假说B (高diff 2 = 探索) ---
+                # # 变量名也清晰地反映了它的作用
+                # explore_tendency = torch.sigmoid(self.modulation_gain * percentage_deviation)
+                # # 当explore_tendency趋近1时，权重偏向w_explore
+                # dynamic_weights = explore_tendency * w_explore + (1.0 - explore_tendency) * w_exploit
+                
+                # Create a lookup for easier access
+                weights_map = {name: weight for name, weight in zip(self.indicator_names, dynamic_weights)}
+
+                # ### 新增: 记录 batch 的平均值 ###
+                internal_metrics['percentage_deviation'].append(percentage_deviation.item())
+                internal_metrics['exploit_tendency'].append(exploit_tendency.item())
+                # ### 新增: 记录动态权重 ###
+                for name, weight in weights_map.items():
+                    log_name = f"weight_{name.replace(' ', '_').lower()}"
+                    if log_name not in internal_metrics:
+                        internal_metrics[log_name] = []
+                    internal_metrics[log_name].append(weight.item())
+
+                # Case 1: GAE with token-level metrics (dense reward)
+                #  
+                if self.adv_estimator == 'gae' and self.output_token_level_metrics:
+                    aux_reward_per_token = torch.zeros(valid_response_length, device=data.batch.device, dtype=torch.bfloat16)
+                    for indicator_name in self.indicator_names:
+                        token_level_indicator = data_item.batch['calculator_results'][layer_key][f"{indicator_name}_token_level"]
+                        valid_token_level_indicator = token_level_indicator[:valid_response_length]
+                        
+                        # ### 核心修改：实现分支逻辑 ###
+                        baseline = 0.0
+                        if self.token_level_baseline_type == 'internal_mean':
+                            # --- 新思路：使用内部动态基准 ---
+                            baseline = torch.mean(valid_token_level_indicator)
+                        
+                        elif self.token_level_baseline_type == 'external_ema':
+                            # --- 老办法：使用外部历史EMA ---
+                            baseline = self.mids[indicator_name]
+                        else:
+                            raise ValueError(f"Invalid token_level_baseline_type: {self.token_level_baseline_type}")
+
+                        relative_deviation_tensor = (valid_token_level_indicator - baseline) / (torch.abs(baseline) + self.epsilon)
+                        relative_deviation_tensor = torch.clamp(relative_deviation_tensor, -5.0, 5.0)
+                        
+                        
+                        # (日志记录逻辑不变)
+                        log_name = f"relative_deviation_{indicator_name.replace(' ', '_').lower()}"
+                        if log_name not in internal_metrics: internal_metrics[log_name] = []
+                        internal_metrics[log_name].append(relative_deviation_tensor.mean().item())
+
+                        aux_reward_per_token += act_func(relative_deviation_tensor) * weights_map[indicator_name]
+                    
+                    final_aux_reward = aux_reward_per_token * performance_scaling_factor
+                    reward_tensor[i, :valid_response_length] += final_aux_reward
+                
+                # Case 2: All other cases (GRPO or sequence-level metrics) (sparse reward)
+                else:
+                    #  
+                    calculator_tensor_i = 0.0
+                    for indicator_name in self.indicator_names:
+                        original_indicator = data_item.batch['calculator_results'][layer_key][indicator_name]
+                        relative_deviation = (original_indicator - self.mids[indicator_name]) / (abs(self.mids[indicator_name]) + self.epsilon)
+                        relative_deviation = torch.clamp(relative_deviation, -5.0, 5.0)
+
+                        # Log the scalar relative deviation
+                        log_name = f"relative_deviation_{indicator_name.replace(' ', '_').lower()}"
+                        if log_name not in internal_metrics: internal_metrics[log_name] = []
+                        internal_metrics[log_name].append(relative_deviation.item())
+                        
+                        calculator_tensor_i += act_func(relative_deviation) * weights_map[indicator_name]
+
+                    final_aux_reward = calculator_tensor_i * performance_scaling_factor
+                    reward_tensor[i, valid_response_length - 1] += final_aux_reward
+
+
+
+        
+        # ### 修改点2: 将所有EMA更新逻辑集中在此处 ###
+        if use_aux_reward and not is_val:
+            # 1. 更新性能得分的EMA
+            self.ema_performance_score = (1 - self.ema_alpha) * self.ema_performance_score + \
+                                                self.ema_alpha * reward_tensor_0.sum(dim=-1).float().mean().cpu().item()
+            
+            # 2. 更新各个指标的EMA (即 self.mids)
+            
+            for indicator_name in self.indicator_names:
+                metric_key = f'cal/overall/layer_{layer_key}/{indicator_name}/mean'
+                if metric_key in metrics_old:
+                    v = metrics_old[metric_key]
+                    self.mids[indicator_name] = (1 - self.ema_alpha) * self.mids[indicator_name] + self.ema_alpha * v
+
   
-                    gap = original_indicator - self.mids[indicator_name]
-                    calculator_tensor[i]  += act_func(gap * self.weights_inner[j]) * self.weights[j]
-
-                # calculator_tensor[i]  = act_func(torch.log(original_indicator) - self.mid)
-                # * correctness_tensor[i] 表示ne_diff_2_1
-                reward_tensor[i, valid_response_length - 1] = reward_tensor_0[i, valid_response_length - 1] + calculator_tensor[i]
-            else:
-                reward_tensor[i, valid_response_length - 1] = score_dict['score']
-
-
-        return {"reward_tensor": reward_tensor, "correctness_tensor": correctness_tensor, "reward_tensor_0": reward_tensor_0}
+        return {"reward_tensor": reward_tensor, 
+                "correctness_tensor": correctness_tensor, 
+                "reward_tensor_0": reward_tensor_0,
+                "internal_metrics": internal_metrics}
 
 
 class RepresentationMetricsCalculator():
     """Calculates representation quality metrics from hidden states with memory optimization."""
     
-    def __init__(self, tokenizer, max_seq_len=512, svd_rank=6, compute_log_effective_rank=False):
+    def __init__(self, tokenizer, max_seq_len=512, svd_rank=6, compute_log_effective_rank=False, metric_indices=None, output_token_level_metrics=False):
         """
         Initializes the RepresentationMetricsCalculator.
 
@@ -202,182 +343,209 @@ class RepresentationMetricsCalculator():
         self.svd_rank = svd_rank        # Number of singular values retained for SVD
         self._cached_tensors = {}       # Cache for reusing intermediate results
         self.compute_log_effective_rank = compute_log_effective_rank # New flag for log effective rank
+        self.output_token_level_metrics = output_token_level_metrics
+        self.epsilon = 1e-8 # 添加 epsilon
+
+
+        # 定义所有可用的基础指标和它们的计算函数
+        all_base_metrics = [
+            ("Response Entropy 1", self.calculate_response_entropy),
+            # 使用 lambda 确保可以传递额外参数
+            ("Effective Rank", lambda hs, mask: self.calculate_effective_rank(hs, mask, log_output=False)),
+            ("Curvature", self.calculate_curvature)
+        ]
+
+        # 如果需要，动态添加 Log Effective Rank
+        if self.compute_log_effective_rank:
+            all_base_metrics.append(
+                ("Log Effective Rank", lambda hs, mask: self.calculate_effective_rank(hs, mask, log_output=True))
+            )
+        
+        # 根据传入的索引筛选出需要计算的指标
+        if metric_indices is None:
+            # 如果没有提供索引，默认使用所有指标
+            self.selected_metrics = all_base_metrics
+        else:
+            # 从所有可用指标中，根据索引选择
+            self.selected_metrics = [all_base_metrics[i] for i in metric_indices if i < len(all_base_metrics)]
+        
+        print(f"[RepresentationMetricsCalculator] Initialized with selected metrics: {[name for name, _ in self.selected_metrics]}")
 
     def __call__(self, hidden_states, attention_mask, compute_diff=False, diff_stride=1):
-        """
-        Computes representation quality metrics for given hidden states.
-
-        Args:
-            hidden_states (torch.Tensor): Tensor of hidden states with shape
-                                          (batch_size, seq_len, num_layers, hidden_dim).
-            attention_mask (torch.Tensor): Attention mask with shape (batch_size, seq_len).
-            compute_diff (bool): If True, computes 1st and 2nd order differences for metrics.
-                                 Defaults to False.
-            diff_stride (int): Stride for the sliding window when computing differences. Defaults to 1.
-
-        Returns:
-            dict: A dictionary where keys are layer indices (as strings) and values are
-                  dictionaries of computed metrics for that layer.
-        """
-        with torch.inference_mode():  # Disable gradient calculation and optimize memory
+        with torch.inference_mode():
             batch_size, seq_len, num_layers, hidden_dim = hidden_states.shape
             results = {}
             
             for layer_idx in range(num_layers):
                 layer_key = str(layer_idx + 1)
-                # Ensure the tensor is contiguous for efficient slicing
                 layer_hidden = hidden_states[:, :, layer_idx, :].contiguous()
                 
-                # Base metric calculation for the current layer
+                # 1. 照常计算所有的 sequence-level 指标
                 base_metrics = {
-                    "Response Entropy 1": self.calculate_response_entropy(layer_hidden, attention_mask, 1, "gram"),
-                    "Effective Rank": self.calculate_effective_rank(layer_hidden, attention_mask, log_output=False),
-                    "Curvature": self.calculate_curvature(layer_hidden, attention_mask)
+                    name: func(layer_hidden, attention_mask)
+                    for name, func in self.selected_metrics
                 }
-
-                # Add log effective rank if enabled
-                if self.compute_log_effective_rank:
-                    base_metrics["Log Effective Rank"] = self.calculate_effective_rank(layer_hidden, attention_mask, log_output=True)
                 
+                per_stride_diffs = {}
                 if compute_diff:
-                    # Calculate differences for all relevant metrics
-                    diff_metrics = self.calculate_metric_diff(layer_hidden, attention_mask, diff_stride)
-                    base_metrics.update(diff_metrics)
+                    final_diffs, per_stride_diffs = self.calculate_metric_diff(layer_hidden, attention_mask, diff_stride)
+                    base_metrics.update(final_diffs)
+                
+                if self.output_token_level_metrics:
+                    # ### 修正点: 遍历字典条目的一个静态列表 ###
+                    # 通过 list(base_metrics.items()) 创建一个副本进行遍历
+                    for name, seq_level_tensor in list(base_metrics.items()):
+                        # 避免为已经是 token-level 的指标再次创建
+                        if name.endswith("_token_level"):
+                            continue
+
+                        token_level_key = f"{name}_token_level"
+                        
+                        if name in per_stride_diffs:
+                            base_metrics[token_level_key] = self._distribute_value_by_scaling(
+                                seq_level_tensor, per_stride_diffs[name], attention_mask, diff_stride
+                            )
+                        else:
+                            base_metrics[token_level_key] = self._sequence_to_token_level(
+                                seq_level_tensor, attention_mask
+                            )
                 
                 results[layer_key] = base_metrics
-                self._free_memory()  # Explicitly free memory after each layer
+                self._free_memory()
                 
             return results
 
+    def _distribute_value_by_scaling(self, seq_level_tensor, per_stride_values_list, attention_mask, stride):
+        """
+        Implements the user's "first assign, then scale" algorithm to distribute
+        a sequence-level value to the token-level.
+        """
+        batch_size, seq_len = attention_mask.shape
+        final_token_tensor = torch.zeros_like(attention_mask, dtype=torch.float32)
+
+        for i in range(batch_size):
+            target_sum_s = seq_level_tensor[i].item()
+            stride_values_d = per_stride_values_list[i]
+            
+            if not stride_values_d:
+                continue
+
+            # 1. Create the temporary token-level tensor
+            temp_token_tensor = torch.zeros(seq_len, device=attention_mask.device)
+            valid_len = attention_mask[i].sum()
+            num_strides = len(stride_values_d)
+
+            for k in range(num_strides):
+                start_idx = k * stride
+                end_idx = min((k + 1) * stride, valid_len)
+                temp_token_tensor[start_idx:end_idx] = stride_values_d[k]
+
+            # 2. Calculate the temporary sum
+            temporary_sum = temp_token_tensor.sum()
+
+            # 3. Calculate the scaling factor, handling the edge case of sum being zero
+            if abs(temporary_sum.item()) < self.epsilon:
+                if valid_len > 0:
+                    per_token_value = target_sum_s / valid_len
+                    final_token_tensor[i, :valid_len] = per_token_value
+                continue
+            
+            scaling_factor = target_sum_s / temporary_sum
+
+            # 4. Apply the scaling to get the final tensor
+            final_token_tensor[i] = temp_token_tensor * scaling_factor
+
+        return final_token_tensor
+
+    def _sequence_to_token_level(self, seq_level_tensor, attention_mask):
+        """
+        Converts a sequence-level metric tensor to a token-level one by
+        smearing the value across valid tokens. Used for base metrics.
+        """
+        valid_lengths = attention_mask.sum(dim=1).float()
+        valid_lengths = torch.clamp(valid_lengths, min=1)
+        per_token_value = seq_level_tensor / valid_lengths
+        token_level_tensor = per_token_value.unsqueeze(1).expand_as(attention_mask)
+        token_level_tensor = token_level_tensor * attention_mask.float()
+        return token_level_tensor
+
     def calculate_metric_diff(self, hidden_states, attention_mask, stride):
-        """
-        Calculates sliding window metric differences (memory optimized version).
-
-        Args:
-            hidden_states (torch.Tensor): Hidden states for a single layer (batch_size, seq_len, hidden_dim).
-            attention_mask (torch.Tensor): Attention mask (batch_size, seq_len).
-            stride (int): Stride for the sliding window.
-
-        Returns:
-            dict: A dictionary containing 1st and 2nd order differences for each metric.
-        """
         batch_size, seq_len, hidden_dim = hidden_states.shape
         device = hidden_states.device
 
-        # Initialize dictionaries for differences, dynamically adding log effective rank diffs
-        diffs = {
-            "Response Entropy 1 diff": torch.zeros(batch_size, device=device),
-            "Effective Rank diff": torch.zeros(batch_size, device=device),
-            "Curvature diff": torch.zeros(batch_size, device=device),
-            "Response Entropy 1 diff 2": torch.zeros(batch_size, device=device),
-            "Effective Rank diff 2": torch.zeros(batch_size, device=device),
-            "Curvature diff 2": torch.zeros(batch_size, device=device)
+        metric_calculators = {
+            "Response Entropy 1": lambda h: self._single_entropy(h, 1, "gram"),
+            "Effective Rank": lambda h: self._single_effective_rank(h, log_output=False),
+            "Curvature": lambda h: self._single_curvature(h),
+            "Log Effective Rank": lambda h: self._single_effective_rank(h, log_output=True)
         }
-        if self.compute_log_effective_rank:
-            diffs["Log Effective Rank diff"] = torch.zeros(batch_size, device=device)
-            diffs["Log Effective Rank diff 2"] = torch.zeros(batch_size, device=device)
-        
-        # Define the order of metrics for processing in the loop
-        metric_order = ["entropy", "rank", "curvature"]
-        if self.compute_log_effective_rank:
-            metric_order.append("log_rank")
+
+        selected_metric_names = [name for name, _ in self.selected_metrics]
+        selected_calculators = [metric_calculators[name] for name in selected_metric_names]
+        num_metrics_to_track = len(selected_metric_names)
+
+        final_diffs = {}      # 存放最终平均值
+        per_stride_diffs = {} # 存放每个样本的stride值列表
+
+        for name in selected_metric_names:
+            final_diffs[f"{name} diff"] = torch.zeros(batch_size, device=device)
+            final_diffs[f"{name} diff 2"] = torch.zeros(batch_size, device=device)
+            per_stride_diffs[f"{name} diff"] = [[] for _ in range(batch_size)]
+            per_stride_diffs[f"{name} diff 2"] = [[] for _ in range(batch_size)]
 
         for i in range(batch_size):
             mask = attention_mask[i].bool()
             valid_hidden = hidden_states[i, mask, :]
             valid_len = valid_hidden.size(0)
             
-            if valid_len < 2: # Need at least 2 tokens for differences
+            if valid_len < 2:
                 continue
-                
             if valid_len > self.max_seq_len:
                 valid_hidden = valid_hidden[-self.max_seq_len:]
                 valid_len = self.max_seq_len
                 
-            # Initialize history sums and counts based on the number of metrics
-            num_metrics_to_track = len(metric_order)
             history_sum = [0.0] * num_metrics_to_track
             history_count = 0
-            total_diff = [0.0] * num_metrics_to_track
-            total_diff2 = [0.0] * num_metrics_to_track
-            valid_diff_count = 0
-            prev_diff = None # To store the previous 1st order difference for 2nd order calculation
+            prev_diff = None
             
             for t in range(1, valid_len):
                 if t % stride != 0:
                     continue
                 
-                # Define the window for the current calculation
                 window_start = max(0, t - self.max_seq_len + 1)
                 sub_hidden = valid_hidden[window_start:t+1]
-                
-                cache_key = f"{i}_{t}"
-                if cache_key in self._cached_tensors:
-                    current_metrics_tuple = self._cached_tensors[cache_key]
-                else:
-                    # Compute current metrics for the sub-window
-                    current_metrics_tuple = (
-                        self._single_entropy(sub_hidden, 1, "gram"),
-                        self._single_effective_rank(sub_hidden, log_output=False),
-                        self._single_curvature(sub_hidden)
-                    )
-                    if self.compute_log_effective_rank:
-                        current_metrics_tuple += (self._single_effective_rank(sub_hidden, log_output=True),)
-                    
-                    self._cached_tensors[cache_key] = current_metrics_tuple
-                
-                # Convert tuple to list for mutable operations
-                current_metrics = list(current_metrics_tuple)
+                current_metrics = [calc(sub_hidden) for calc in selected_calculators]
 
                 if history_count > 0:
-                    # Calculate historical mean for comparison
-                    hist_avg = [
-                        history_sum[j] / history_count for j in range(num_metrics_to_track)
-                    ]
+                    hist_avg = [s / history_count for s in history_sum]
+                    curr_diff = [(curr - avg) for curr, avg in zip(current_metrics, hist_avg)]
                     
-                    # Calculate current 1st order difference
-                    curr_diff = [
-                        (curr - avg) for curr, avg in zip(current_metrics, hist_avg)
-                    ]
+                    # 记录每个stride的diff值
+                    for idx, name in enumerate(selected_metric_names):
+                        per_stride_diffs[f"{name} diff"][i].append(curr_diff[idx])
                     
-                    # Accumulate 1st order differences
-                    total_diff = [sum_ + d for sum_, d in zip(total_diff, curr_diff)]
-                    
-                    # Calculate 2nd order differences if previous difference exists
                     if prev_diff is not None:
-                        curr_diff2 = [
-                            (curr_d - prev_d) for curr_d, prev_d in zip(curr_diff, prev_diff)
-                        ]
-                        total_diff2 = [sum_ + d2 for sum_, d2 in zip(total_diff2, curr_diff2)]
+                        curr_diff2 = [(cd - pd) for cd, pd in zip(curr_diff, prev_diff)]
+                        for idx, name in enumerate(selected_metric_names):
+                            per_stride_diffs[f"{name} diff 2"][i].append(curr_diff2[idx])
                     
-                    prev_diff = curr_diff # Store current 1st order diff for next iteration
-                    valid_diff_count += 1
+                    prev_diff = curr_diff
                 
-                # Update historical accumulation
-                history_sum = [sum_ + curr for sum_, curr in zip(history_sum, current_metrics)]
+                history_sum = [s + curr for s, curr in zip(history_sum, current_metrics)]
                 history_count += 1
                 
-                self._free_memory() # Clear cache and empty CUDA cache periodically
+        # 计算最终的平均值
+        for i in range(batch_size):
+            for name in selected_metric_names:
+                diff_key = f"{name} diff"
+                if per_stride_diffs[diff_key][i]:
+                    final_diffs[diff_key][i] = torch.tensor(per_stride_diffs[diff_key][i]).mean()
                 
-            if valid_diff_count > 0:
-                # Calculate and store average 1st order differences
-                avg_diff = [t / valid_diff_count for t in total_diff]
-                diffs["Response Entropy 1 diff"][i] = avg_diff[0]
-                diffs["Effective Rank diff"][i] = avg_diff[1]
-                diffs["Curvature diff"][i] = avg_diff[2]
-                if self.compute_log_effective_rank:
-                    diffs["Log Effective Rank diff"][i] = avg_diff[3]
-                
-                # Calculate and store average 2nd order differences
-                if valid_diff_count > 1:
-                    avg_diff2 = [t / (valid_diff_count - 1) for t in total_diff2]
-                    diffs["Response Entropy 1 diff 2"][i] = avg_diff2[0]
-                    diffs["Effective Rank diff 2"][i] = avg_diff2[1]
-                    diffs["Curvature diff 2"][i] = avg_diff2[2]
-                    if self.compute_log_effective_rank:
-                        diffs["Log Effective Rank diff 2"][i] = avg_diff2[3]
-        
-        return diffs
+                diff2_key = f"{name} diff 2"
+                if len(per_stride_diffs[diff2_key][i]) > 0:
+                    final_diffs[diff2_key][i] = torch.tensor(per_stride_diffs[diff2_key][i]).mean()
+
+        return final_diffs, per_stride_diffs
 
     def _single_entropy(self, hidden: torch.Tensor, alpha: float = 1.0001, matrix_type: str = 'gram') -> float:
         """
@@ -410,7 +578,7 @@ class RepresentationMetricsCalculator():
                     matrix = centered @ centered.T 
                 
                 # Compute eigenvalues (symmetric matrix, so use eigvalsh for efficiency and stability)
-                matrix = matrix.to(torch.float64)
+                matrix = matrix.to(torch.float32)
                 eigvals = torch.linalg.eigvalsh(matrix)  # Ensure numerical stability
                 
                 # Filter out very small eigenvalues for numerical stability
@@ -447,24 +615,24 @@ class RepresentationMetricsCalculator():
         """
         if hidden.size(0) < 2: # Need at least 2 tokens for SVD
             return 0.0
-            
-        with torch.amp.autocast(device_type='cuda'):
-            # Perform low-rank SVD for efficiency
-            # q is the number of singular values to compute, capped by hidden_dim
-            hidden = hidden.to(torch.float64)  # Ensure float64 for SVD stability
-            _, S, _ = torch.svd_lowrank(hidden, q=min(self.svd_rank, hidden.size(1)))
-            
-            # Normalize singular values to sum to 1
-            normalized_S = S / (S.sum() + 1e-8) # Add epsilon for stability
-            
-            # Compute effective rank using the formula: exp(-sum(p_i * log(p_i)))
-            # Add epsilon to log argument for stability if p_i is zero
-            if log_output:
-                # Directly return -sum(p_i * log(p_i)) when log_output is True
-                return -torch.sum(normalized_S * torch.log(normalized_S + 1e-8)).item()
-            else:
-                # Return the effective rank itself
-                return torch.exp(-torch.sum(normalized_S * torch.log(normalized_S + 1e-8))).item()
+
+        try:
+            with torch.amp.autocast(device_type='cuda'):
+
+                centered = hidden - hidden.mean(dim=0, keepdim=True) # 加一行这个和entropy保持一致性
+
+                centered = centered.to( torch.float32)
+                _, S, _ = torch.svd_lowrank(centered, q=min(self.svd_rank, centered.size(1)))
+                
+                normalized_S = S / (S.sum() + 1e-8)
+                
+                if log_output:
+                    return -torch.sum(normalized_S * torch.log(normalized_S + 1e-8)).item()
+                else:
+                    return torch.exp(-torch.sum(normalized_S * torch.log(normalized_S + 1e-8))).item()
+        except torch._C._LinAlgError as e:
+            # print(f"[WARNING] SVD failed in _single_effective_rank. Returning 0.0. Error: {e}")
+            return 0.0
 
     def _single_curvature(self, hidden: torch.Tensor) -> float:
         """
@@ -586,21 +754,18 @@ class RepresentationMetricsCalculator():
                 ranks[i] = 0.0
                 continue
                 
-            # Compute singular values using full SVD for batch version
-            # (can be replaced with low-rank SVD if performance is critical and rank is small)
-            U, S, Vh = torch.linalg.svd(valid_hidden, full_matrices=False)
-            
-            # Normalize singular values
-            normalized_S = S / (S.sum() + 1e-8) # Add epsilon for stability
-            
-            # Compute effective rank
-            # Add epsilon to log argument for stability if p_i is zero
-            if log_output:
-                # Directly return -sum(p_i * log(p_i)) when log_output is True
-                ranks[i] = -torch.sum(normalized_S * torch.log(normalized_S + 1e-8))
-            else:
-                # Return the effective rank itself
-                ranks[i] = torch.exp(-torch.sum(normalized_S * torch.log(normalized_S + 1e-8)))
+            try:
+                U, S, Vh = torch.linalg.svd(valid_hidden, full_matrices=False)
+                
+                normalized_S = S / (S.sum() + 1e-8)
+                
+                if log_output:
+                    ranks[i] = -torch.sum(normalized_S * torch.log(normalized_S + 1e-8))
+                else:
+                    ranks[i] = torch.exp(-torch.sum(normalized_S * torch.log(normalized_S + 1e-8)))
+            except torch._C._LinAlgError as e:
+                # print(f"[WARNING] SVD failed for a sample in calculate_effective_rank. Setting rank to 0.0. Error: {e}")
+                ranks[i] = 0.0 # 为失败的样本返回安全值
             
         return ranks
     
@@ -754,7 +919,10 @@ def main_task(config, compute_score=None):
         mapping[Role.RewardModel] = global_pool_id
 
     calculator = RepresentationMetricsCalculator(tokenizer=tokenizer, 
-                                                 compute_log_effective_rank=config.calculator.compute_log_effective_rank)
+                                                 compute_log_effective_rank=config.calculator.compute_log_effective_rank,
+                                                 metric_indices=config.calculator.get('metric_indices', None),
+                                                 output_token_level_metrics=config.calculator.output_token_level_metrics,
+                                                 )
 
 
     # <<< 修改 RewardManager 的实例化过程 >>>
@@ -766,9 +934,15 @@ def main_task(config, compute_score=None):
                               ema_alpha=config.reward_manager.ema_alpha,
                               indicator_names=config.reward_manager.indicator_names,
                               weights=config.reward_manager.weights,
-                              weights_inner=config.reward_manager.weights_inner,
+                              weights_exploit=config.reward_manager.weights_exploit,
                               calculator_enabled=config.calculator.enable,
-                              add_reward=config.reward_manager.add_reward)
+                              add_reward=config.reward_manager.add_reward,
+                              modulation_gain=config.reward_manager.modulation_gain,
+                              adv_estimator=config.algorithm.adv_estimator,
+                              output_token_level_metrics=config.calculator.output_token_level_metrics,
+                              aux_reward_global_weight=config.reward_manager.aux_reward_global_weight,
+                              token_level_baseline_type=config.reward_manager.token_level_baseline_type,
+                            )
     
     # Note that we always use function-based RM for validation
     val_reward_fn = RewardManager(tokenizer=tokenizer, 
@@ -778,9 +952,15 @@ def main_task(config, compute_score=None):
                                   ema_alpha=config.reward_manager.ema_alpha,
                                   indicator_names=config.reward_manager.indicator_names,
                                   weights=config.reward_manager.weights,
-                                  weights_inner=config.reward_manager.weights_inner,
+                                  weights_exploit=config.reward_manager.weights_exploit,
                                   calculator_enabled=config.calculator.enable,
-                                  add_reward=config.reward_manager.add_reward)
+                                  add_reward=config.reward_manager.add_reward,
+                                  modulation_gain=config.reward_manager.modulation_gain,
+                                    adv_estimator=config.algorithm.adv_estimator,
+                                    output_token_level_metrics=config.calculator.output_token_level_metrics,
+                                    aux_reward_global_weight=config.reward_manager.aux_reward_global_weight,
+                                    token_level_baseline_type=config.reward_manager.token_level_baseline_type,
+                                  )
     # <<< 修改结束 >>>
 
     # reward_fn = RewardManager(tokenizer=tokenizer, num_examine=0, compute_score=compute_score, calculator=calculator)

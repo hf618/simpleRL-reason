@@ -166,7 +166,7 @@ def _compute_response_info(batch):
 
     prompt_length = prompt_mask.sum(-1).float()
     response_length = response_mask.sum(-1).float()  # (batch_size,)
-    # breakpoint()
+    #  
     # Initialize base return dict
     return_dict = dict(
         response_mask=response_mask,
@@ -740,7 +740,7 @@ class RayPPOTrainer(object):
             test_gen_batch_padded, pad_size = pad_dataproto_to_divisor(test_gen_batch, self.actor_rollout_wg.world_size)
             
             test_output_gen_batch_padded = self.actor_rollout_wg.generate_sequences(test_gen_batch_padded)
-            # breakpoint()
+            #  
             # unpad
             test_output_gen_batch = unpad_dataproto(test_output_gen_batch_padded, pad_size=pad_size)
             print('validation generation end')
@@ -751,14 +751,14 @@ class RayPPOTrainer(object):
             response_attention_mask = test_batch.batch['attention_mask'][:, prompt_len:]
             lens_tensor = response_attention_mask.sum(dim=-1)  # [10] - sum of non-padding tokens for each sample
 
-
+             
             # <<< INICIO DE MODIFICACIONES EN _validate >>>
             # Obtener diff_stride desde la configuración de Hydra
-            if use_calculator:
+            if use_calculator and 'hidden_states_decode' in test_batch.batch:
                 diff_stride_val = self.config.calculator.get('diff_stride', 20)
                 
                 test_batch.batch['calculator_results'] = self.calculator(
-                    hidden_states=test_batch.batch['hidden_states'],  # [10, 2048, 2, 896]
+                    hidden_states=test_batch.batch['hidden_states_decode'],  # [10, 2048, 2, 896]
                     attention_mask=response_attention_mask,  # [10, 2048]
                     compute_diff=True, 
                     diff_stride=diff_stride_val  # Usar el valor de la configuración
@@ -797,7 +797,7 @@ class RayPPOTrainer(object):
         correctness_tensor = torch.cat(correctness_lst, dim=0).cpu()
         data_sources = np.concatenate(data_source_lst, axis=0)
         
-        if use_calculator:
+        if use_calculator and 'calculator_results' in test_batch.batch:
             calculator_cat = concatenate_results(calculater_lst)
         else:
             calculator_cat = {}
@@ -854,7 +854,7 @@ class RayPPOTrainer(object):
                         if indicator not in data_source_calculator_correct[data_source][layer]:
                             data_source_calculator_correct[data_source][layer][indicator] = []
                             data_source_calculator_incorrect[data_source][layer][indicator] = []
-
+                        
                         data_source_calculator_overall[data_source][layer][indicator].append(value_tensor[i].item())
 
                         if is_correct == 1:
@@ -906,8 +906,8 @@ class RayPPOTrainer(object):
             metric_dict[f'val/test_incorrect_len/{data_source}'] = np.mean(incorrect_lengths) if incorrect_lengths else 0.0
 
         
-        if 'hidden_states' in test_batch.batch:
-            del test_batch.batch['hidden_states']
+        if 'hidden_states_decode' in test_batch.batch:
+            del test_batch.batch['hidden_states_decode']
         if 'calculator_results' in test_batch.batch:
             del test_batch.batch['calculator_results']
 
@@ -1191,12 +1191,15 @@ class RayPPOTrainer(object):
                     # generate a batch
                     with _timer('gen', timing_raw):
                         gen_batch_output = self.actor_rollout_wg.generate_sequences(gen_batch)
+                        
+                     
                     
+                    # 为批次中的每个样本生成一个唯一的 UUID，用于在后续处理中追踪和识别每个样本，特别是在计算 GRPO (Group-based Reward Policy Optimization) 优势时很重要
                     batch.non_tensor_batch['uid'] = np.array([str(uuid.uuid4()) for _ in range(len(batch.batch))], dtype=object)
                     # repeat to align with repeated responses in rollout
                     batch = batch.repeat(repeat_times=self.config.actor_rollout_ref.rollout.n, interleave=True)
                     batch = batch.union(gen_batch_output)
-
+                     
                     # balance the number of valid tokens on each dp rank.
                     # Note that this breaks the order of data inside the batch.
                     # Please take care when you implement group based adv computation such as GRPO and rloo
@@ -1239,27 +1242,21 @@ class RayPPOTrainer(object):
                     # 更新指标
 
                     # <<< INICIO DE MODIFICACIONES EN fit >>>
-                    if use_calculator:
+                    if use_calculator and 'hidden_states_decode' in batch.batch:
                         prompt_len = batch.batch['prompts'].shape[1] # 例如 512
                         response_attention_mask = batch.batch['attention_mask'][:, prompt_len:]
                         diff_stride_train = self.config.calculator.get('diff_stride', 20)
                         
                         batch.batch['calculator_results'] = self.calculator(
-                            hidden_states=batch.batch['hidden_states'], # [10, 2048, 2, 896]
+                            hidden_states=batch.batch['hidden_states_decode'], # [10, 2048, 2, 896]
                             attention_mask=response_attention_mask, # [10, 2048]
                             compute_diff=True, 
                             diff_stride=diff_stride_train
                         )
-                        del batch.batch['hidden_states']
-
-                    # <<< FIN DE MODIFICACIONES EN fit >>>
-
+                        del batch.batch['hidden_states_decode']
 
                     
-                    # 立即回收内存
-                    # del batch.batch['hidden_states']
-                    
-                    # breakpoint()
+                    #  
                     if self.config.trainer.remove_clip:
                         batch.batch['attention_mask'] = adjusted_attention_mask
 
@@ -1311,6 +1308,18 @@ class RayPPOTrainer(object):
                         batch.batch['token_level_scores'] = reward_tensor_dict['reward_tensor']
                         batch.batch['correctness'] = reward_tensor_dict['correctness_tensor']
 
+                        # reward_tensor_dict['reward_tensor'].sum(dim=1,keepdim=True)
+                        # reward_tensor_dict['reward_tensor_0'].sum(dim=1,keepdim=True)
+
+                        # ### 新增: 接收并处理来自 RewardManager 的内部指标 ###
+                        internal_reward_metrics = reward_tensor_dict.get('internal_metrics', {})
+                        if internal_reward_metrics:
+                            for key, value_list in internal_reward_metrics.items():
+                                if value_list: # 确保列表不为空
+                                    # 将列表中的值求平均，并添加到主 metrics 字典中
+                                    metrics[f'reward_manager/{key}_mean'] = np.mean(value_list)
+                        # ### 新增结束 ###
+
                         # compute rewards. apply_kl_penalty if available
                         if not self.config.actor_rollout_ref.actor.get('use_kl_loss', False):
                             batch, kl_metrics = apply_kl_penalty(batch,
@@ -1332,7 +1341,7 @@ class RayPPOTrainer(object):
 
 
                     # <<< INICIO DE MODIFICACIONES EN fit >>>
-                    if use_calculator:
+                    if use_calculator and 'calculator_results' in batch.batch:
                         metrics.update(compute_calculator_metrics(batch.batch['calculator_results'], batch.batch['correctness'], self.reward_fn.mids))
                         del batch.batch['calculator_results']
                     # <<< FIN DE MODIFICACIONES EN fit >>>
@@ -1349,7 +1358,7 @@ class RayPPOTrainer(object):
                     # implement critic warmup
                     if self.config.trainer.critic_warmup <= self.global_steps:
                         # update actor
-                        # breakpoint()
+                        #  
                         with _timer('update_actor', timing_raw):
                             actor_output = self.actor_rollout_wg.update_actor(batch)
                         actor_output_metrics = reduce_metrics(actor_output.meta_info['metrics'])
@@ -1375,7 +1384,7 @@ class RayPPOTrainer(object):
                 logger.log(data=metrics, step=self.global_steps)
 
                 self.global_steps += 1
-                # breakpoint()
+                #  
 
                 metrics_old = metrics.copy()
 

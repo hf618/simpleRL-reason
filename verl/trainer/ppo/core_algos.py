@@ -90,6 +90,7 @@ def compute_gae_advantage_return(token_level_rewards: torch.Tensor, values: torc
             shape: (bs, response_length)
 
     """
+     
     with torch.no_grad():
         lastgaelam = 0
         advantages_reversed = []

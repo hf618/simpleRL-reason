@@ -629,7 +629,11 @@ def parse_ground_truth(example: Dict[str, Any], data_name):
         gt_cot, gt_ans = None, example["final_answer"][0].strip("$")
     elif data_name in [
         "aime24",
+        "aime25",
+        "aime25_I",
+        "aime25_II",
         "amc23",
+        "amc24",
         "cmath",
         "gaokao2024_I",
         "gaokao2024_II",
