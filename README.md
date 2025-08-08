@@ -11,4 +11,8 @@
 * **不要提交你对 `train_grpo_math_tune_ray.sh` 文件的任何本地修改。**
 * 如果你修改了这个文件以适应你自己的环境，请在执行 `git add .` 命令前，确保这个文件没有被添加到暂存区。如果不小心添加了，可以使用 `git restore --staged train_grpo_math_tune_ray.sh` 将其移出暂存区。
 
+### 关于 `bfloat16`
+
+V100上不支持bfloat16，有些地方n可能得手动调整。
+
 ---

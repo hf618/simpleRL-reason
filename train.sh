@@ -1,7 +1,7 @@
 # # 小学生守则
 # 1. False / True 字符别写错了
 # 2. --enable_calculator True 记得要和model_runner对应（古法炼钢，在源码里魔改）
-# 3. hidden states 是否通过 norm 要明确记录, 数据类型一开始就干成 float32
+# 3. hidden states 是否通过 norm 要明确记录, 数据类型一开始就干成 bfloat16
 # 4. 是否进行effective rank 中心化
 bash train_grpo_math_tune_ray.sh \
     --model_name llama/Llama-3.2-1B-Instruct --max_response_length 1024 \

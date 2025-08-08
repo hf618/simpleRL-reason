@@ -18,13 +18,14 @@ from python_executor import PythonExecutor
 from model_utils import load_hf_lm_and_tokenizer, generate_completions
 
 import json # 确保导入
-# from metrics_calculator import RepresentationMetricsCalculator # 导入新创建的类
+
 import sys
 import os
-project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-sys.path.append(project_root)
-from metrics_calculator import RepresentationMetricsCalculator 
-import ipdb
+# 将项目根目录添加到 Python 的模块搜索路径中
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
+sys.path.insert(0, project_root)
+from verl.trainer.metrics_calculator import RepresentationMetricsCalculator
+
 
 def parse_args():
     parser = argparse.ArgumentParser()

@@ -15,7 +15,7 @@
 FSDP PPO Trainer with Ray-based single controller.
 This trainer supports model-agonistic model initialization with huggingface
 """
-
+import time
 import os
 import uuid
 from contextlib import contextmanager
@@ -1192,7 +1192,6 @@ class RayPPOTrainer(object):
                     with _timer('gen', timing_raw):
                         gen_batch_output = self.actor_rollout_wg.generate_sequences(gen_batch)
                         
-                     
                     
                     # 为批次中的每个样本生成一个唯一的 UUID，用于在后续处理中追踪和识别每个样本，特别是在计算 GRPO (Group-based Reward Policy Optimization) 优势时很重要
                     batch.non_tensor_batch['uid'] = np.array([str(uuid.uuid4()) for _ in range(len(batch.batch))], dtype=object)
@@ -1237,26 +1236,24 @@ class RayPPOTrainer(object):
                         if mask:
                             adjusted_attention_mask[i, -max_len:] = 0  # 将响应部分掩码置零
                     
-                    # metrics.update(compute_response_metrics(batch=batch))
 
-                    # 更新指标
+                    # 判断是否用 hidden_states_decode 计算 metrics
+                    with _timer('cal', timing_raw):
+                        if use_calculator and 'hidden_states_decode' in batch.batch:
 
-                    # <<< INICIO DE MODIFICACIONES EN fit >>>
-                    if use_calculator and 'hidden_states_decode' in batch.batch:
-                        prompt_len = batch.batch['prompts'].shape[1] # 例如 512
-                        response_attention_mask = batch.batch['attention_mask'][:, prompt_len:]
-                        diff_stride_train = self.config.calculator.get('diff_stride', 20)
-                        
-                        batch.batch['calculator_results'] = self.calculator(
-                            hidden_states=batch.batch['hidden_states_decode'], # [10, 2048, 2, 896]
-                            attention_mask=response_attention_mask, # [10, 2048]
-                            compute_diff=True, 
-                            diff_stride=diff_stride_train
-                        )
-                        del batch.batch['hidden_states_decode']
+                            prompt_len = batch.batch['prompts'].shape[1] # 例如 512
+                            response_attention_mask = batch.batch['attention_mask'][:, prompt_len:]
+                            diff_stride_train = self.config.calculator.get('diff_stride', 20)
+
+                            batch.batch['calculator_results'] = self.calculator(hidden_states=batch.batch['hidden_states_decode'], 
+                                                                                attention_mask=response_attention_mask,
+                                                                                compute_diff=True, 
+                                                                                diff_stride=diff_stride_train
+                                                                                )
+
+                            del batch.batch['hidden_states_decode']
 
                     
-                    #  
                     if self.config.trainer.remove_clip:
                         batch.batch['attention_mask'] = adjusted_attention_mask
 
@@ -1301,30 +1298,27 @@ class RayPPOTrainer(object):
                             reward_tensor = self.rm_wg.compute_rm_score(batch)
                             batch = batch.union(reward_tensor)
 
-                        # we combine with rule-based rm
-                        reward_tensor_dict: dict = self.reward_fn(batch, is_val=False, metrics_old=metrics_old)  # 这儿加了一个
-                        # batch.batch['token_level_scores'] = reward_tensor
+                        # 计算 rewards 输出一个字典
+                        reward_tensor_dict: dict = self.reward_fn(batch, is_val=False, metrics_old=metrics_old)
+
+                        
                         batch.batch['token_level_scores_0'] = reward_tensor_dict['reward_tensor_0']
                         batch.batch['token_level_scores'] = reward_tensor_dict['reward_tensor']
                         batch.batch['correctness'] = reward_tensor_dict['correctness_tensor']
 
-                        # reward_tensor_dict['reward_tensor'].sum(dim=1,keepdim=True)
-                        # reward_tensor_dict['reward_tensor_0'].sum(dim=1,keepdim=True)
 
-                        # ### 新增: 接收并处理来自 RewardManager 的内部指标 ###
+                        # 接收并处理来自 RewardManager 的内部指标 #
                         internal_reward_metrics = reward_tensor_dict.get('internal_metrics', {})
                         if internal_reward_metrics:
                             for key, value_list in internal_reward_metrics.items():
                                 if value_list: # 确保列表不为空
                                     # 将列表中的值求平均，并添加到主 metrics 字典中
                                     metrics[f'reward_manager/{key}_mean'] = np.mean(value_list)
-                        # ### 新增结束 ###
+
 
                         # compute rewards. apply_kl_penalty if available
                         if not self.config.actor_rollout_ref.actor.get('use_kl_loss', False):
-                            batch, kl_metrics = apply_kl_penalty(batch,
-                                                                 kl_ctrl=self.kl_ctrl,
-                                                                 kl_penalty=self.config.algorithm.kl_penalty)
+                            batch, kl_metrics = apply_kl_penalty(batch, kl_ctrl=self.kl_ctrl, kl_penalty=self.config.algorithm.kl_penalty)
                             metrics.update(kl_metrics)
                         else:
                             batch.batch['token_level_rewards'] = batch.batch['token_level_scores']
@@ -1337,16 +1331,10 @@ class RayPPOTrainer(object):
                                                   num_repeat=self.config.actor_rollout_ref.rollout.n)
                     
                     metrics.update(compute_response_metrics(batch=batch))
-                    # metrics.update(compute_calculator_metrics(batch.batch['calculator_results'], batch.batch['correctness'], self.reward_fn.mids))
 
-
-                    # <<< INICIO DE MODIFICACIONES EN fit >>>
                     if use_calculator and 'calculator_results' in batch.batch:
                         metrics.update(compute_calculator_metrics(batch.batch['calculator_results'], batch.batch['correctness'], self.reward_fn.mids))
                         del batch.batch['calculator_results']
-                    # <<< FIN DE MODIFICACIONES EN fit >>>
-
-
 
                     # update critic
                     if self.use_critic:
@@ -1384,7 +1372,6 @@ class RayPPOTrainer(object):
                 logger.log(data=metrics, step=self.global_steps)
 
                 self.global_steps += 1
-                #  
 
                 metrics_old = metrics.copy()
 
