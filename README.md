@@ -28,7 +28,7 @@ V100上不支持bfloat16，有些地方可能得手动调整。
 | `engine/llm_engine.py` | LLMEngine.step 中的 output = self.model_executor.execute_model(execute_model_req=execute_model_req) | no |
 | `entrypoints/llm.py` | LLM._run_engine 中的 step_outputs = self.llm_engine.step() | 不确定 |
 | `outputs.py` | RequestOutput 增加初始化参数 hidden_states_decode 和 hidden_states_prefill；在from_seq_group方法中，从SequenceGroup 对象中获取 Prefill 阶段的隐藏状态，从每个Sequence 对象中获取 Decode 阶段的隐藏状态 | yes |
-| `sequence.py` | Sequence 类增加 append_hidden_state 方法实现使用torch.cat实现增量存储 hidden_states_decode |
+| `sequence.py` | Sequence 类增加 append_hidden_state 方法实现使用torch.cat实现增量存储 hidden_states_decode | yes |
 | `engine/output_processor/single_step.py` | process_prompt_logprob 方法中添加 hidden_states_prefill， _process_sequence_group_outputs 方法中添加 hidden_states_decode | yes |
 | `engine/output_processor/util.py` | 修改 create_output_by_sequence_group 方法处理 hidden states，方便 `engine/llm_engine.py` 调用 | yes |
 | `worker/worker.py` | Work 类初始化的 self.model_runner: GPUModelRunnerBase = ModelRunnerClass 显式传入 return_hidden_states = False or True 作为总开关,如果FALSE,则decode 和 prefill都不输出 这里的 Work 类是测试eval的时候被调用，所以按需提取hidden states | yes |
