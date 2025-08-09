@@ -648,22 +648,7 @@ class RayPPOTrainer(object):
                                        filter_prompts=True,
                                        return_raw_chat=self.config.data.get('return_raw_chat', False),
                                        truncation='error')
-        # self.val_dataloader = DataLoader(dataset=self.val_dataset,
-        #                                  batch_size=len(self.val_dataset),
-        #                                  shuffle=True,
-        #                                  drop_last=True,
-        #                                  collate_fn=collate_fn)
 
-        # sampled_indices = np.random.choice(len(self.val_dataset), size=10, replace=False)
-        # sampled_dataset = Subset(self.val_dataset, sampled_indices)
-        # self.val_dataloader = DataLoader(
-        #     dataset=sampled_dataset,
-        #     batch_size=len(sampled_dataset),  # 或更小的 batch_size
-        #     shuffle=False,  # 已随机采样，无需再 shuffle
-        #     drop_last=False,
-        #     collate_fn=collate_fn
-        # )
-        # <<< INICIO DE MODIFICACIONES >>>
         # Lógica para submuestrear el dataloader de validación si se especifica
         val_sample_size = self.config.trainer.get('val_sample_size', -1)
         if val_sample_size > 0:
@@ -686,7 +671,6 @@ class RayPPOTrainer(object):
                                              shuffle=True,
                                              drop_last=True,
                                              collate_fn=collate_fn)
-        # <<< FIN DE MODIFICACIONES >>>
 
         assert len(self.train_dataloader) >= 1
         assert len(self.val_dataloader) >= 1
@@ -1157,7 +1141,7 @@ class RayPPOTrainer(object):
         # load checkpoint before doing anything
         self._load_checkpoint()
 
-        # perform validation before training 这儿记住打开 ****************************************
+        # perform validation before training 
         # currently, we only support validation using the reward_function.
 
         if self.val_reward_fn is not None and self.config.trainer.get('val_before_train', True):
@@ -1167,11 +1151,8 @@ class RayPPOTrainer(object):
             if self.config.trainer.get('val_only', False):
                 return
 
-
-        # <<< INICIO DE MODIFICACIONES EN fit >>>
         # Leer el flag para habilitar/deshabilitar el calculator
         use_calculator = self.config.calculator.get('enable', True)
-        # <<< FIN DE MODIFICACIONES EN fit >>>
 
         # we start from step 1
         self.global_steps += 1
