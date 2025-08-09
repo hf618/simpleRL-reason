@@ -321,7 +321,7 @@ class RepresentationMetricsCalculator_parallel():
 
 
         available_cpus = ray.available_resources().get("CPU", 1)
-        self.num_actors = min(4, int(available_cpus - 1))
+        self.num_actors = min(2, int(available_cpus - 1))
         print(f" -> Ray reports {available_cpus} CPUs available. Creating Actor Pool with {self.num_actors} actors.")
         actors = [metrics_utils.MetricCalculatorActor.remote(self.svd_rank) for _ in range(self.num_actors)]
         self.actor_pool = ActorPool(actors)

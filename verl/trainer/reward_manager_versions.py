@@ -525,7 +525,7 @@ class RewardManager_parallel():
         print(f" -> Token-level baseline type: {self.token_level_baseline_type}")
 
         available_cpus = ray.available_resources().get("CPU", 1)
-        self.num_actors = min(4, int(available_cpus - 1))
+        self.num_actors = min(2, int(available_cpus - 1))
         print(f" -> Ray reports {available_cpus} CPUs available. Creating Actor Pool with {self.num_actors} actors.")
         
         actors = [RewardCalculatorActor.remote(
