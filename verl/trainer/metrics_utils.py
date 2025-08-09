@@ -4,25 +4,26 @@
 import torch
 import torch.nn.functional as F
 import os
-import ray # <--- 导入 ray
+import ray 
 
 # --- 所有单一计算逻辑函数保持不变 ---
-
 def compute_single_entropy(hidden: torch.Tensor, alpha: float = 1.0001, matrix_type: str = 'gram') -> float:
     """计算单个样本的熵"""
     assert matrix_type in ['covariance', 'gram'], "matrix_type must be 'covariance' or 'gram'"
     if hidden.size(0) < 2: return 0.0
     try:
-        # 移除 autocast(device='cuda')，因为所有张量都在CPU上，避免不必要的CUDA初始化
         centered = hidden - hidden.mean(dim=0, keepdim=True)
+        matrix = None
         if matrix_type == 'covariance':
             matrix = centered.T @ centered / (centered.size(0) - 1)
-        else:
+        else: # 'gram'
             matrix = centered @ centered.T
+        
         matrix = matrix.to(torch.float32)
-        eigvals = torch.linalg.eigvalsh(matrix)
+        eigvals = torch.linalg.eigvalsh(matrix) # 始终计算全部特征值
         eigvals = eigvals[eigvals > 1e-8]
         if len(eigvals) == 0: return 0.0
+        
         normalized = eigvals / eigvals.sum()
         if abs(alpha - 1.0) < 1e-6:
             normalized = normalized[normalized > 1e-12]
@@ -32,14 +33,20 @@ def compute_single_entropy(hidden: torch.Tensor, alpha: float = 1.0001, matrix_t
     except torch._C._LinAlgError:
         return 0.0
 
-def compute_single_effective_rank(hidden: torch.Tensor, svd_rank: int, log_output: bool = False) -> float:
-    """计算单个样本的有效秩"""
+def compute_single_effective_rank(hidden: torch.Tensor, svd_rank: int, log_output: bool = False, method: str = 'lowrank') -> float:
+    """计算单个样本的有效秩，支持 'lowrank' 和 'full' 两种SVD方法"""
+    assert method in ['lowrank', 'full'], "SVD method must be 'lowrank' or 'full'"
     if hidden.size(0) < 2: return 0.0
+    
     try:
-        # 移除 autocast(device='cuda')
         centered = hidden - hidden.mean(dim=0, keepdim=True)
         centered = centered.to(torch.float32)
-        _, S, _ = torch.svd_lowrank(centered, q=min(svd_rank, centered.size(1)))
+        S = None
+        if method == 'lowrank':
+            _, S, _ = torch.svd_lowrank(centered, q=min(svd_rank, min(centered.shape)))
+        else: # 'full'
+            _, S, _ = torch.linalg.svd(centered, full_matrices=False)
+            
         normalized_S = S / (S.sum() + 1e-8)
         if log_output:
             return -torch.sum(normalized_S * torch.log(normalized_S + 1e-8)).item()
@@ -68,26 +75,25 @@ def compute_single_curvature(hidden: torch.Tensor) -> float:
     return 0.0
 
 # 这个函数包含了之前在 RepresentationMetricsCalculator 和 MetricCalculatorActor 中重复的 diff 计算逻辑。
-def calculate_diffs_for_single_sample(valid_hidden, max_seq_len, stride, selected_metric_names, svd_rank):
+def calculate_diffs_for_single_sample(valid_hidden, max_seq_len, stride, selected_metric_names, 
+                                      svd_rank, svd_method):
     """为单个样本的隐藏状态计算所有选定指标的一阶和二阶差分。"""
     metric_calculators = {
-        "Response Entropy 1": lambda h: compute_single_entropy(h, 1, "gram"),
-        "Effective Rank": lambda h: compute_single_effective_rank(h, svd_rank, log_output=False),
+        "Response Entropy 1": lambda h: compute_single_entropy(h, 1.0001, "gram"),
+        "Effective Rank": lambda h: compute_single_effective_rank(h, svd_rank, log_output=False, method=svd_method),
         "Curvature": lambda h: compute_single_curvature(h),
-        "Log Effective Rank": lambda h: compute_single_effective_rank(h, svd_rank, log_output=True)
+        "Log Effective Rank": lambda h: compute_single_effective_rank(h, svd_rank, log_output=True, method=svd_method)
     }
+    # ... (函数其余部分保持不变) ...
     active_calculators = [metric_calculators[name] for name in selected_metric_names if name in metric_calculators]
     num_metrics_to_track = len(active_calculators)
     valid_len = valid_hidden.size(0)
-    
     history_sum, history_count, prev_diff = [0.0] * num_metrics_to_track, 0, None
     per_stride_diffs_i = {f"{name} diff": [] for name in selected_metric_names}
     per_stride_diffs_i.update({f"{name} diff 2": [] for name in selected_metric_names})
-    
     if valid_len > max_seq_len:
         valid_hidden = valid_hidden[-max_seq_len:]
         valid_len = max_seq_len
-        
     for t in range(1, valid_len):
         if t % stride != 0: continue
         sub_hidden = valid_hidden[max(0, t - max_seq_len + 1):t+1]
@@ -104,7 +110,6 @@ def calculate_diffs_for_single_sample(valid_hidden, max_seq_len, stride, selecte
             prev_diff = curr_diff
         history_sum = [s + curr for s, curr in zip(history_sum, current_metrics)]
         history_count += 1
-        
     return per_stride_diffs_i
 
 

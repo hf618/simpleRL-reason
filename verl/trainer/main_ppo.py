@@ -135,6 +135,7 @@ def main_task(config, compute_score=None):
                                                  compute_log_effective_rank=config.calculator.compute_log_effective_rank,
                                                  metric_indices=config.calculator.get('metric_indices', None),
                                                  output_token_level_metrics=config.calculator.output_token_level_metrics,
+                                                 svd_method='full',
                                                  )
 
 

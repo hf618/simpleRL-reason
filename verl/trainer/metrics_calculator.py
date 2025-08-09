@@ -12,7 +12,13 @@ from . import metrics_utils
 class RepresentationMetricsCalculator():
     """Calculates representation quality metrics from hidden states with memory optimization."""
     
-    def __init__(self, tokenizer, max_seq_len=512, svd_rank=6, compute_log_effective_rank=False, metric_indices=None, output_token_level_metrics=False):
+    def __init__(self, tokenizer, max_seq_len=512, 
+                 metric_indices=None, 
+                 output_token_level_metrics=False,
+                 svd_method: str = 'lowrank', 
+                 svd_rank: int = 6,
+                 compute_log_effective_rank: bool = False,
+                 ):
         """
         Initializes the RepresentationMetricsCalculator.
 
@@ -20,22 +26,25 @@ class RepresentationMetricsCalculator():
             tokenizer: The tokenizer object (not directly used in metric calculation, but for context).
             max_seq_len (int): Maximum sequence length to process for memory optimization. Defaults to 512.
             svd_rank (int): Number of singular values to retain for SVD-based calculations. Defaults to 6.
-            compute_log_effective_rank (bool): If True, calculates and includes the log of Effective Rank
-                                               and its differences. Defaults to False.
+            compute_log_effective_rank (bool): If True, calculates and includes the log of Effective Rank and its differences. Defaults to False.
+            svd_method (str): SVD方法 ('lowrank' or 'full'). 默认为 'lowrank'.
+            svd_rank (int): 低秩SVD的秩. 默认为 6.
+            compute_log_effective_rank (bool): 是否计算 Log Effective Rank.
         """
         self.tokenizer = tokenizer
-        self.max_seq_len = max_seq_len  # Controls the maximum sequence length processed
-        self.svd_rank = svd_rank        # Number of singular values retained for SVD
-        self._cached_tensors = {}       # Cache for reusing intermediate results
-        self.compute_log_effective_rank = compute_log_effective_rank # New flag for log effective rank
+        self.max_seq_len = max_seq_len
         self.output_token_level_metrics = output_token_level_metrics
-        self.epsilon = 1e-8 # 添加 epsilon
-
+        self.epsilon = 1e-8
+        self.compute_log_effective_rank = compute_log_effective_rank # New flag for log effective rank
+        
+        # 保存SVD配置
+        self.svd_method = svd_method
+        self.svd_rank = svd_rank
+        self._cached_tensors = {}
 
         # 定义所有可用的基础指标和它们的计算函数
         all_base_metrics = [
             ("Response Entropy 1", self.calculate_response_entropy),
-            # 使用 lambda 确保可以传递额外参数
             ("Effective Rank", lambda hs, mask: self.calculate_effective_rank(hs, mask, log_output=False)),
             ("Curvature", self.calculate_curvature)
         ]
@@ -55,6 +64,7 @@ class RepresentationMetricsCalculator():
             self.selected_metrics = [all_base_metrics[i] for i in metric_indices if i < len(all_base_metrics)]
         
         print(f"[RepresentationMetricsCalculator] Initialized with selected metrics: {[name for name, _ in self.selected_metrics]}")
+        print(f" -> SVD Config: method={self.svd_method}, rank={self.svd_rank}")
 
     def __call__(self, hidden_states, attention_mask, compute_diff=False, diff_stride=1):
         with torch.inference_mode():
@@ -155,16 +165,11 @@ class RepresentationMetricsCalculator():
         return token_level_tensor
 
     def calculate_metric_diff(self, hidden_states, attention_mask, stride):
-        # 修改 7/7: 修改 - 串行版本现在也调用共享函数，而不是自己实现内部循环。
-        # 这大大简化了此方法的代码，并确保了与并行版本逻辑上的统一。
         batch_size, _, _ = hidden_states.shape
         device = hidden_states.device
-
         selected_metric_names = [name for name, _ in self.selected_metrics]
         final_diffs = {f"{name} diff": torch.zeros(batch_size, device=device) for name in selected_metric_names}
         final_diffs.update({f"{name} diff 2": torch.zeros(batch_size, device=device) for name in selected_metric_names})
-        
-        # 初始化用于存储每个样本 stride 列表的结构
         per_stride_diffs = {f"{name} diff": [[] for _ in range(batch_size)] for name in selected_metric_names}
         per_stride_diffs.update({f"{name} diff 2": [[] for _ in range(batch_size)] for name in selected_metric_names})
 
@@ -177,7 +182,8 @@ class RepresentationMetricsCalculator():
 
             # 调用从 metrics_utils 导入的共享函数
             per_stride_diffs_i = metrics_utils.calculate_diffs_for_single_sample(
-                valid_hidden, self.max_seq_len, stride, selected_metric_names, self.svd_rank
+                valid_hidden, self.max_seq_len, stride, selected_metric_names, 
+                self.svd_rank, self.svd_method
             )
             
             # 聚合结果
@@ -263,7 +269,8 @@ class RepresentationMetricsCalculator():
             valid_hidden = hidden_states[i, mask, :]  # [valid_seq_len, hidden_dim]
             
             # 为每个样本调用单一计算函数
-            ranks[i] = metrics_utils.compute_single_effective_rank(valid_hidden, self.svd_rank, log_output)
+            ranks[i] = metrics_utils.compute_single_effective_rank(
+                valid_hidden, self.svd_rank, log_output, self.svd_method)
         return ranks
     
     def calculate_curvature(self, hidden_states: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
