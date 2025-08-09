@@ -21,9 +21,12 @@ import json # 确保导入
 
 import sys
 import os
-# 将项目根目录添加到 Python 的模块搜索路径中
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
-sys.path.insert(0, project_root)
+# 从当前文件位置向上返回两级目录，以正确获得项目根目录
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+# 将正确的项目根目录添加到 sys.path
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+# 现在，这个 import 应该可以成功执行了
 from verl.trainer.metrics_calculator import RepresentationMetricsCalculator
 
 

@@ -7,14 +7,15 @@ DTYPE="torch.bfloat16"
 HDFS_PATH="/home/root1/Fanding/simpleRL-reason/custom"
 MODEL_BASE_PATH="/media/root1/4t/Models"
 GPU_MEMORY_UTILIZATION=0.70
+# "aime25,amc24,aime24,amc23,aqua,asdiv,carp_en,cmath,cn_middle_school,college_math,gaokao2023en,gaokao2024_I,gaokao2024_II,gaokao2024_mix,gaokao_math_cloze,gaokao_math_qa,gsm8k,math,math500,mawps,minerva_math,mmlu_stem,olympiadbench,sat_math,svamp,tabmwp" 
 
 # --- 全局默认参数 ---
 # 将所有需要测试的数据集统一放在这里
-BENCHMARKS="aime25,amc24,aime24,amc23,aqua,asdiv,carp_en,cmath,cn_middle_school,college_math,gaokao2023en,gaokao2024_I,gaokao2024_II,gaokao2024_mix,gaokao_math_cloze,gaokao_math_qa,gsm8k,math,math500,mawps,minerva_math,mmlu_stem,olympiadbench,sat_math,svamp,tabmwp" 
-DEFAULT_TEMPLATE="qwen-boxed"
-DEFAULT_N_SAMPLING=1
-DEFAULT_SPECIFIC_STEPS="100"
-TEMPERATURES=(0.0)
+BENCHMARKS="aime25,amc24,aime24,amc23"
+DEFAULT_TEMPLATE="abel"
+DEFAULT_N_SAMPLING=256
+DEFAULT_SPECIFIC_STEPS="140"
+TEMPERATURES=(0.6)
 MAX_RESPONSE_LENGTH=(1280)
 TOP_P=0.95
 USE_WANDB="false"
@@ -29,7 +30,6 @@ RUN_COLLECT_RESULTS="false"
 # =======================================================
 # --- 步骤 1: 定义简短的“别名”，并用一个普通数组控制执行顺序 ---
 RUN_ALIASES=(
-    "llama_1B_origin_grpo"
     "llama_1B_er_grpo"
 )
 
@@ -38,28 +38,24 @@ RUN_ALIASES=(
 # 别名 -> 完整的 Run Name
 declare -A RUN_NAME_MAP
 RUN_NAME_MAP=(
-    ["llama_1B_origin_grpo"]="llama/Llama-3.2-1B-Instruct_origin_verl-grpo_max_response1024_batch48_rollout4_valbatch48_ppomini24_logprobbatch1_klcoef0.001_entcoef0.001_epochs2_simplelr_abel_gsm8k_level1_ema0.5_stride20_mgain1.5_grpo"
-    ["llama_1B_er_grpo"]="llama/Llama-3.2-1B-Instruct_er_pyr_3_new_verl-grpo_max_response1024_batch48_rollout4_valbatch48_ppomini24_logprobbatch1_klcoef0.001_entcoef0.001_epochs2_simplelr_abel_gsm8k_level1_stride20_mgain1.0_auxgw1.0_ema0.3_grpo"
+    ["llama_1B_er_grpo"]="llama/Llama-3.2-1B-Instruct_er_pyr_3_new_normcen_verl-grpo_max_response1024_batch48_ppomini24_valbatch48_rollout4_logprobbatch1_klcoef0.001_entcoef0.001_epochs2_simplelr_abel_gsm8k_level1_stride20_mgain1.0_auxgw0.5_ema0.3_grpo"
 )
 
 # 别名 -> 基础模型
 declare -A BASE_MODEL_MAP
 BASE_MODEL_MAP=(
-    ["llama_1B_origin_grpo"]="Llama-3.2-1B-Instruct"
     ["llama_1B_er_grpo"]="Llama-3.2-1B-Instruct"
 )
 
 # 别名 -> 特定评测步骤
 declare -A STEP_MAP
 STEP_MAP=(
-    ["llama_1B_origin_grpo"]="0,140"
-    ["llama_1B_er_grpo"]="140,220"
+    ["llama_1B_er_grpo"]="140"
 )
 
 # 别名 -> 特定模板
 declare -A TEMPLATE_MAP
 TEMPLATE_MAP=(
-    ["llama_1B_origin_grpo"]="abel"
     ["llama_1B_er_grpo"]="abel"
 )
 
