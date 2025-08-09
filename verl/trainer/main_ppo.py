@@ -131,14 +131,14 @@ def main_task(config, compute_score=None):
         mapping[Role.RewardModel] = global_pool_id
 
     
-    calculator = RepresentationMetricsCalculator_parallel(tokenizer=tokenizer, 
+    calculator = RepresentationMetricsCalculator(tokenizer=tokenizer, 
                                                  compute_log_effective_rank=config.calculator.compute_log_effective_rank,
                                                  metric_indices=config.calculator.get('metric_indices', None),
                                                  output_token_level_metrics=config.calculator.output_token_level_metrics,
                                                  )
 
 
-    reward_fn = RewardManager_parallel(tokenizer=tokenizer, 
+    reward_fn = RewardManager(tokenizer=tokenizer, 
                               num_examine=0, 
                               compute_score=compute_score, 
                               calculator=calculator,
@@ -156,7 +156,7 @@ def main_task(config, compute_score=None):
                             )
     
     # Note that we always use function-based RM for validation
-    val_reward_fn = RewardManager_parallel(tokenizer=tokenizer, 
+    val_reward_fn = RewardManager(tokenizer=tokenizer, 
                                   num_examine=1, 
                                   compute_score=None, 
                                   calculator=calculator,
