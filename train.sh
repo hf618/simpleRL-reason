@@ -17,7 +17,7 @@ bash train_grpo_math_tune_ray.sh \
     --reward_weights "[0.0, 0.0, 1.0]" --reward_weights_exploit "[0.0, 1.0, 0.0]" \
     --reward_indicator_names "['Effective Rank diff 2', 'Effective Rank diff', 'Effective Rank']" \
     --output_token_level_metrics False --compute_log_effective_rank False \
-    --diff_stride 20 --modulation_gain 1.0 --aux_reward_global_weight 0.5 --reward_ema_alpha 0.3 --adv_estimator "grpo" 
+    --diff_stride 20 --modulation_gain 1.0 --aux_reward_global_weight 0.2 --reward_ema_alpha 0.3 --adv_estimator "grpo" 
 
 # python monitor_gpu.py -H 10 -S 2 -g 0 1 -o ./custom/log_gpu
 # w1 "[1.0, 0.25, 0.0625]"

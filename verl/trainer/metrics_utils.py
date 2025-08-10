@@ -74,7 +74,6 @@ def compute_single_curvature(hidden: torch.Tensor) -> float:
         return torch.cat(angles).mean().item()
     return 0.0
 
-# 这个函数包含了之前在 RepresentationMetricsCalculator 和 MetricCalculatorActor 中重复的 diff 计算逻辑。
 def calculate_diffs_for_single_sample(valid_hidden, max_seq_len, stride, selected_metric_names, 
                                       svd_rank, svd_method):
     """为单个样本的隐藏状态计算所有选定指标的一阶和二阶差分。"""

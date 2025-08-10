@@ -135,8 +135,9 @@ def main_task(config, compute_score=None):
                                                  compute_log_effective_rank=config.calculator.compute_log_effective_rank,
                                                  metric_indices=config.calculator.get('metric_indices', None),
                                                  output_token_level_metrics=config.calculator.output_token_level_metrics,
-                                                 svd_method='full',
-                                                 )
+                                                zeroth_order_svd_method='full',   # 0阶用 full
+                                                diff_svd_method='lowrank'       # diff 用 full
+                                        )
 
 
     reward_fn = RewardManager(tokenizer=tokenizer, 

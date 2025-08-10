@@ -11,11 +11,11 @@ GPU_MEMORY_UTILIZATION=0.70
 
 # --- 全局默认参数 ---
 # 将所有需要测试的数据集统一放在这里
-BENCHMARKS="aime25,amc24,aime24,amc23"
+BENCHMARKS="aime25,amc24,aime24,amc23,aqua,asdiv,carp_en,cmath,cn_middle_school,college_math,gaokao2023en,gaokao2024_I,gaokao2024_II,gaokao2024_mix,gaokao_math_cloze,gaokao_math_qa,gsm8k,math,math500,mawps,minerva_math,mmlu_stem,olympiadbench,sat_math,svamp,tabmwp" 
 DEFAULT_TEMPLATE="abel"
-DEFAULT_N_SAMPLING=256
+DEFAULT_N_SAMPLING=1
 DEFAULT_SPECIFIC_STEPS="140"
-TEMPERATURES=(0.6)
+TEMPERATURES=(0.0)
 MAX_RESPONSE_LENGTH=(1280)
 TOP_P=0.95
 USE_WANDB="false"

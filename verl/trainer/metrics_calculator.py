@@ -15,7 +15,8 @@ class RepresentationMetricsCalculator():
     def __init__(self, tokenizer, max_seq_len=512, 
                  metric_indices=None, 
                  output_token_level_metrics=False,
-                 svd_method: str = 'lowrank', 
+                 zeroth_order_svd_method: str = 'full',
+                 diff_svd_method: str = 'lowrank',
                  svd_rank: int = 6,
                  compute_log_effective_rank: bool = False,
                  ):
@@ -25,11 +26,11 @@ class RepresentationMetricsCalculator():
         Args:
             tokenizer: The tokenizer object (not directly used in metric calculation, but for context).
             max_seq_len (int): Maximum sequence length to process for memory optimization. Defaults to 512.
-            svd_rank (int): Number of singular values to retain for SVD-based calculations. Defaults to 6.
             compute_log_effective_rank (bool): If True, calculates and includes the log of Effective Rank and its differences. Defaults to False.
-            svd_method (str): SVD方法 ('lowrank' or 'full'). 默认为 'lowrank'.
             svd_rank (int): 低秩SVD的秩. 默认为 6.
-            compute_log_effective_rank (bool): 是否计算 Log Effective Rank.
+            zeroth_order_svd_method (str): SVD method for 0-order metrics ('full' or 'lowrank').
+            diff_svd_method (str): SVD method for 1st/2nd order diffs ('full' or 'lowrank').
+            svd_rank (int): The rank for low-rank SVD calculations.
         """
         self.tokenizer = tokenizer
         self.max_seq_len = max_seq_len
@@ -38,9 +39,10 @@ class RepresentationMetricsCalculator():
         self.compute_log_effective_rank = compute_log_effective_rank # New flag for log effective rank
         
         # 保存SVD配置
-        self.svd_method = svd_method
-        self.svd_rank = svd_rank
         self._cached_tensors = {}
+        self.zeroth_order_svd_method = zeroth_order_svd_method
+        self.diff_svd_method = diff_svd_method
+        self.svd_rank = svd_rank
 
         # 定义所有可用的基础指标和它们的计算函数
         all_base_metrics = [
@@ -64,7 +66,6 @@ class RepresentationMetricsCalculator():
             self.selected_metrics = [all_base_metrics[i] for i in metric_indices if i < len(all_base_metrics)]
         
         print(f"[RepresentationMetricsCalculator] Initialized with selected metrics: {[name for name, _ in self.selected_metrics]}")
-        print(f" -> SVD Config: method={self.svd_method}, rank={self.svd_rank}")
 
     def __call__(self, hidden_states, attention_mask, compute_diff=False, diff_stride=1):
         with torch.inference_mode():
@@ -163,7 +164,7 @@ class RepresentationMetricsCalculator():
         token_level_tensor = per_token_value.unsqueeze(1).expand_as(attention_mask)
         token_level_tensor = token_level_tensor * attention_mask.float()
         return token_level_tensor
-
+ 
     def calculate_metric_diff(self, hidden_states, attention_mask, stride):
         batch_size, _, _ = hidden_states.shape
         device = hidden_states.device
@@ -176,29 +177,24 @@ class RepresentationMetricsCalculator():
         for i in range(batch_size):
             mask = attention_mask[i].bool()
             valid_hidden = hidden_states[i, mask, :]
-            
-            if valid_hidden.size(0) < 2:
-                continue
+            if valid_hidden.size(0) < 2: continue
 
-            # 调用从 metrics_utils 导入的共享函数
+            # 在这里传递 diff_svd_method
             per_stride_diffs_i = metrics_utils.calculate_diffs_for_single_sample(
                 valid_hidden, self.max_seq_len, stride, selected_metric_names, 
-                self.svd_rank, self.svd_method
+                self.svd_rank, self.diff_svd_method # 使用为diff指定的SVD方法
             )
             
-            # 聚合结果
+            # ... (聚合逻辑不变) ...
             for name in selected_metric_names:
                 diff_key = f"{name} diff"
                 if diff_key in per_stride_diffs_i and per_stride_diffs_i[diff_key]:
-                    per_stride_diffs[diff_key][i] = per_stride_diffs_i[diff_key]
                     final_diffs[diff_key][i] = torch.tensor(per_stride_diffs_i[diff_key]).mean()
-                
                 diff2_key = f"{name} diff 2"
                 if diff2_key in per_stride_diffs_i and per_stride_diffs_i[diff2_key]:
-                    per_stride_diffs[diff2_key][i] = per_stride_diffs_i[diff2_key]
                     final_diffs[diff2_key][i] = torch.tensor(per_stride_diffs_i[diff2_key]).mean()
-
         return final_diffs, per_stride_diffs
+    
 
     def _free_tensors(self, tensors):
         """
@@ -270,9 +266,10 @@ class RepresentationMetricsCalculator():
             
             # 为每个样本调用单一计算函数
             ranks[i] = metrics_utils.compute_single_effective_rank(
-                valid_hidden, self.svd_rank, log_output, self.svd_method)
+                valid_hidden, self.svd_rank, log_output, self.zeroth_order_svd_method # 使用为0阶指标指定的SVD方法
+            )
         return ranks
-    
+      
     def calculate_curvature(self, hidden_states: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
         """
         Calculates average curvature for each sample in a batch by calling the single-sample helper.
