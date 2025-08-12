@@ -237,7 +237,20 @@ else
   echo "错误：无效的 adv_estimator: $ADV_ESTIMATOR. 请选择 'grpo' 或 'gae'."
   exit 1
 fi
-# ... (End of argument parsing while loop)
+
+# 检查：如果 RETURN_PREFILL 或 RETURN_DECODE 中任何一个为 True，
+# 那么 RETURN_HIDDEN_STATES 也必须为 True。
+if { [ "$RETURN_PREFILL" = "True" ] || [ "$RETURN_DECODE" = "True" ]; } && [ "$RETURN_HIDDEN_STATES" != "True" ]; then
+  echo "-------------------------------------------------------------------"
+  echo "【错误】参数逻辑冲突"
+  echo "当 --return_prefill 或 --return_decode 设置为 True 时,"
+  echo "意味着需要从 prefill 或 decode 阶段获取 hidden states，"
+  echo "因此 --return_hidden_states 参数也必须设置为 True。"
+  echo ""
+  echo "请检查您的启动参数。"
+  echo "-------------------------------------------------------------------"
+  exit 1
+fi
 
 # Generate a unique suffix based on the input arguments (now without model name)
 SUFFIX=$(generate_suffix "$@")

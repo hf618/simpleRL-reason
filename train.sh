@@ -6,14 +6,14 @@
 # 5. If use PPO: critic_model_path give absolute path, and adv_estimator "gae"
 bash train_grpo_math_tune_ray.sh \
     --model_name llama/Llama-3.2-1B-Instruct --max_response_length 1024 \
-    --critic_model_path "" --adv_estimator "grpo" \
-    --train_batch_size 48 --ppo_mini_batch_size 24 --val_batch_size 48 --rollout_n 4 \
+    --critic_model_path "/media/root1/4t/Models/deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B" --adv_estimator "gae" \
+    --train_batch_size 4 --ppo_mini_batch_size 4 --val_batch_size 48 --rollout_n 1 \
     --ppo_micro_batch_size 1 --log_prob_micro_batch_size 1 --micro_rollout_batch_size 1 \
     --kl_loss_coef 0.001 --entropy_coeffient 0.001 --rollout_gpu_memory_util 0.70 \
 	--logger_config "['console','wandb']" \
     --rollout_tp 2 --save_freq 20 --test_freq 5 --total_epochs 2 \
-    --exp_name "test" --add_reward True --dataset_name "simplelr_abel_gsm8k_level1" \
-    --val_before_train True --val_sample_size -1 \
+    --exp_name "originPPO" --add_reward False --dataset_name "simplelr_abel_gsm8k_level1" \
+    --val_before_train False --val_sample_size -1 \
     --enable_calculator True --metric_indices "[0,1]" \
     --reward_weights "[0.0, 0.0, 1.0]" --reward_weights_exploit "[0.0, 1.0, 0.0]" \
     --reward_indicator_names "['Effective Rank diff 2', 'Effective Rank diff', 'Effective Rank']" \
