@@ -34,12 +34,12 @@ from vllm.config import (
 from vllm.distributed import get_tensor_model_parallel_group, init_distributed_environment, set_custom_all_reduce
 from vllm.model_executor import set_random_seed
 from vllm.model_executor.layers.sampler import SamplerOutput
-from vllm.sequence import ExecuteModelRequest, IntermediateTensors
+from hidden_vllm.sequence import ExecuteModelRequest, IntermediateTensors
 from vllm.worker.cache_engine import CacheEngine
 from vllm.worker.embedding_model_runner import EmbeddingModelRunner
-from vllm.worker.model_runner import GPUModelRunnerBase
+from hidden_vllm.worker.model_runner import GPUModelRunnerBase
 from vllm.worker.model_runner_base import ModelRunnerInputBase
-from vllm.worker.worker import Worker, _check_if_gpu_supports_dtype
+from hidden_vllm.worker.worker import Worker, _check_if_gpu_supports_dtype
 from vllm.worker.worker_base import WorkerInput
 
 from .config import LoadConfig, LoadFormat, ModelConfig

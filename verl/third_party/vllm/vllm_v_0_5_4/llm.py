@@ -28,7 +28,8 @@ from vllm.logger import init_logger
 from vllm.lora.request import LoRARequest
 from vllm.model_executor.guided_decoding import (GuidedDecodingRequest, get_local_guided_decoding_logits_processor)
 from vllm.model_executor.guided_decoding.guided_fields import LLMGuidedOptions
-from vllm.outputs import EmbeddingRequestOutput, RequestOutput
+from vllm.outputs import EmbeddingRequestOutput
+from hidden_vllm.outputs import RequestOutput ###gaibian
 from vllm.pooling_params import PoolingParams
 from vllm.prompt_adapter.request import PromptAdapterRequest
 from vllm.sampling_params import SamplingParams

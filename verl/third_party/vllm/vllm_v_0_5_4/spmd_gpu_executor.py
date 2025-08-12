@@ -22,7 +22,7 @@ import vllm.envs as envs
 from vllm.executor.executor_base import ExecutorBase, ExecutorAsyncBase
 from vllm.logger import init_logger
 from vllm.lora.request import LoRARequest
-from vllm.sequence import SamplerOutput, ExecuteModelRequest
+from hidden_vllm.sequence import SamplerOutput, ExecuteModelRequest
 
 from vllm.config import (CacheConfig, DeviceConfig, LoRAConfig, MultiModalConfig, ParallelConfig, PromptAdapterConfig,
                          SchedulerConfig, SpeculativeConfig)
@@ -47,6 +47,10 @@ class SPMDGPUExecutor(ExecutorBase):
         multimodal_config: Optional[MultiModalConfig],
         speculative_config: Optional[SpeculativeConfig],
         prompt_adapter_config: Optional[PromptAdapterConfig],
+
+        return_hidden_states=False ,
+        return_prefill=False, 
+        return_decode=False
     ) -> None:
         self.model_config = model_config
         self.cache_config = cache_config
@@ -58,6 +62,10 @@ class SPMDGPUExecutor(ExecutorBase):
         self.multimodal_config = multimodal_config
         self.speculative_config = speculative_config
         self.prompt_adapter_config = prompt_adapter_config
+
+        self.return_hidden_states = return_hidden_states
+        self.return_prefill = return_prefill
+        self.return_decode = return_decode
 
         distributed_init_method = initialize_cluster(parallel_config)
         self._init_executor(model, distributed_init_method)
@@ -81,6 +89,7 @@ class SPMDGPUExecutor(ExecutorBase):
         # see https://github.com/NVIDIA/nccl/issues/1234
         os.environ['NCCL_CUMEM_ENABLE'] = '0'
 
+        #  
         self.worker = Worker(
             model,
             self.model_config,

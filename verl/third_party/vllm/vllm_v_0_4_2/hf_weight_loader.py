@@ -18,7 +18,7 @@ from typing import Dict, Union, Optional, Iterable, Tuple
 import torch
 import torch.nn as nn
 
-from vllm.model_executor.model_loader.utils import set_default_torch_dtype
+from hidden_vllm.model_executor.model_loader.utils import set_default_torch_dtype
 from vllm.model_executor.model_loader.weight_utils import default_weight_loader
 
 

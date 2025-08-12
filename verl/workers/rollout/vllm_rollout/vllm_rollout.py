@@ -67,7 +67,13 @@ class vLLMRollout(BaseRollout):
             **kwargs: train_tp, for Megatron Backend to initialize hybrid engine (zero redundancy) process group
         """
         super().__init__()
+        #  
         self.config = config
+        # 在这里可以把config的内容传入model_hf_config
+        model_hf_config.return_hidden_states = config.return_hidden_states
+        model_hf_config.return_prefill = config.return_prefill
+        model_hf_config.return_decode = config.return_decode
+
         assert not (not config.enforce_eager and config.free_cache_engine), \
             "disable CUDA graph (enforce_eager = False) if free cache engine"
 
@@ -279,8 +285,9 @@ class vLLMRollout(BaseRollout):
                 # outputs.append(output)
                 responses_list.append(output[0])
                 log_probs_list.append(output[1])
-                if output[2].numel() > 0:
-                    hidden_states_decode_list.append(output[2])
+                if output[2] is not None:
+                    if output[2].numel() > 0:
+                        hidden_states_decode_list.append(output[2])
                 if output[3] is not None:
                      hidden_states_prefill_list.append(output[3])
         

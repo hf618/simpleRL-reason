@@ -25,7 +25,7 @@ from vllm.config import (CacheConfig, DeviceConfig, ModelConfig, ParallelConfig,
 from vllm.model_executor import InputMetadata, set_random_seed
 from vllm.model_executor.parallel_utils.parallel_state import (initialize_model_parallel)
 from vllm.sampling_params import SamplingParams, SamplingType
-from vllm.sequence import SamplerOutput, SequenceData, SequenceGroupMetadata
+from hidden_vllm.sequence import SamplerOutput, SequenceData, SequenceGroupMetadata
 from vllm.worker.cache_engine import CacheEngine
 from vllm.model_executor.parallel_utils.custom_all_reduce import init_custom_ar
 from vllm.model_executor.parallel_utils.parallel_state import get_tensor_model_parallel_group

@@ -32,7 +32,7 @@ from vllm.executor.executor_base import ExecutorAsyncBase, ExecutorBase
 from vllm.logger import init_logger
 from vllm.lora.request import LoRARequest
 from vllm.model_executor.layers.sampler import SamplerOutput
-from vllm.sequence import ExecuteModelRequest
+from hidden_vllm.sequence import ExecuteModelRequest
 
 from .config import LoadConfig, ModelConfig
 

@@ -20,7 +20,7 @@ import vllm
 from vllm.config import (CacheConfig, DecodingConfig, DeviceConfig, LoRAConfig, ParallelConfig, SchedulerConfig,
                          SpeculativeConfig, VisionLanguageConfig)
 from vllm.core.scheduler import Scheduler
-from vllm.engine.output_processor.interfaces import (SequenceGroupOutputProcessor)
+from hidden_vllm.engine.output_processor.interfaces import (SequenceGroupOutputProcessor)
 from vllm.engine.output_processor.stop_checker import StopChecker
 from vllm.executor.executor_base import ExecutorBase
 from vllm.logger import init_logger
@@ -29,7 +29,7 @@ from vllm.engine.metrics import StatLogger
 from vllm.usage.usage_lib import (UsageContext, is_usage_stats_enabled, usage_message)
 from vllm.utils import Counter
 from vllm.engine.llm_engine import _load_generation_config_dict
-from vllm.engine.llm_engine import LLMEngine
+from hidden_vllm.engine.llm_engine import LLMEngine
 
 import torch.nn as nn
 from .arg_utils import EngineArgs

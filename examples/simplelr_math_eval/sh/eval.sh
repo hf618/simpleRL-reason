@@ -16,7 +16,7 @@ METRICS_TO_CALC=${11:-""}
 METRIC_STRIDE=${12:-1}
 METRIC_ORDERS=${13:-"0,1,2"} 
 NUM_TEST_SAMPLE=${14:--1}  # 默认值为 -1，表示使用所有样本
-DTYPE=${15:-"torch.float16"}
+DTYPE=${15:-" torch.bfloat16"}
 GPU_MEMORY_UTILIZATION=${16:-1.0}
 # English open datasets
 DATA_NAME=${benchmarks}

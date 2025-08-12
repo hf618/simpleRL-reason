@@ -42,7 +42,8 @@ from vllm.executor.executor_base import ExecutorBase
 from vllm.inputs import INPUT_REGISTRY, InputRegistry
 from vllm.inputs.preprocess import InputPreprocessor
 from vllm.logger import init_logger
-from vllm.sequence import Sequence
+# from vllm.sequence import Sequence
+from hidden_vllm.sequence import Sequence
 from vllm.tracing import init_tracer
 from vllm.transformers_utils.detokenizer import Detokenizer
 from vllm.transformers_utils.tokenizer import AnyTokenizer

@@ -22,9 +22,10 @@ import torch.nn as nn
 from .arg_utils import EngineArgs
 from .llm_engine_sp import LLMEngine
 from vllm.lora.request import LoRARequest
-from vllm.outputs import RequestOutput
+# from vllm.outputs import RequestOutput
+from hidden_vllm.outputs import RequestOutput
 from vllm.sampling_params import SamplingParams
-from vllm.sequence import MultiModalData
+from hidden_vllm.sequence import MultiModalData
 from vllm.usage.usage_lib import UsageContext
 from vllm.utils import Counter
 import torch
@@ -209,7 +210,7 @@ class LLM:
             raise ValueError("The lengths of prompts and sampling_params "
                              "must be the same.")
         if multi_modal_data:
-            multi_modal_data.data = multi_modal_data.data.to(torch.float16)
+            multi_modal_data.data = multi_modal_data.data.to( torch.bfloat16)
 
         # Add requests to the engine.
         for i in range(num_requests):

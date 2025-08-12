@@ -24,15 +24,15 @@ import torch.nn as nn
 from vllm.config import (CacheConfig, DeviceConfig, LoRAConfig, MultiModalConfig, ParallelConfig, PromptAdapterConfig,
                          SchedulerConfig, SpeculativeConfig)
 from vllm.model_executor import set_random_seed
-from vllm.sequence import (ExecuteModelRequest, IntermediateTensors, SamplerOutput)
+from hidden_vllm.sequence import (ExecuteModelRequest, IntermediateTensors, SamplerOutput)
 from vllm.worker.cache_engine import CacheEngine
 # TODO(sgm): check why vllm has similar file in vllm.model_executor.parallel_utils.parallel_state
 from vllm.distributed import (init_distributed_environment, set_custom_all_reduce, get_tensor_model_parallel_group)
 from vllm.worker.worker_base import WorkerInput
-from vllm.worker.worker import Worker, _check_if_gpu_supports_dtype
+from hidden_vllm.worker.worker import Worker, _check_if_gpu_supports_dtype
 from vllm.worker.model_runner_base import ModelRunnerBase, ModelRunnerInputBase
 from vllm.worker.embedding_model_runner import EmbeddingModelRunner
-from vllm.worker.model_runner import GPUModelRunnerBase
+from hidden_vllm.worker.model_runner import GPUModelRunnerBase
 from .model_runner import ModelRunner
 from .megatron_weight_loaders import load_megatron_weights
 from .hf_weight_loader import load_hf_weights
@@ -68,6 +68,10 @@ class Worker(Worker):
         is_driver_worker: bool = False,
         model_runner_cls: Optional[Type[GPUModelRunnerBase]] = None,
     ) -> None:
+        self.return_hidden_states = model_config.hf_config.return_hidden_states
+        self.return_prefill = model_config.hf_config.return_prefill
+        self.return_decode = model_config.hf_config.return_decode
+
         # self.model = model  # will be replaced in the init_model
         self.model_config = model_config
         self.parallel_config = parallel_config
@@ -119,7 +123,9 @@ class Worker(Worker):
             is_driver_worker=is_driver_worker,
             prompt_adapter_config=prompt_adapter_config,
             multimodal_config=multimodal_config,
-            return_hidden_states=True,
+            return_hidden_states=self.return_hidden_states,
+            return_decode=self.return_decode,
+            return_prefill=self.return_prefill,
             **speculative_args,
         )
 

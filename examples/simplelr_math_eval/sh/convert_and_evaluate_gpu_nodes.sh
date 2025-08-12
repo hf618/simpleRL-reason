@@ -31,7 +31,7 @@ metrics_to_calc=${16:-""}
 metric_stride=${17:-1}
 metric_orders=${18:-"0,1,2"}
 num_test_sample_per_dataset=${19:--1}  # 默认值为 -1，表示使用所有样本
-dtype=${20:-"torch.float16"}
+dtype=${20:-" torch.bfloat16"}
 gpu_memory_utilization=${21:-1.0}
 # visible_gpus=${14:-""} 
 # # 设置可见的 GPU

@@ -30,7 +30,7 @@ from vllm.lora.worker_manager import LRUCacheWorkerLoRAManager
 from vllm.model_executor import SamplingMetadata
 from vllm.model_executor.models.interfaces import (supports_lora, supports_vision)
 from vllm.utils import (CudaMemoryProfiler, is_hip, is_pin_memory_available)
-from vllm.worker.model_runner import ModelRunner, CUDAGraphRunner
+from hidden_vllm.worker.model_runner import ModelRunner, CUDAGraphRunner
 from vllm.prompt_adapter.worker_manager import (LRUCacheWorkerPromptAdapterManager)
 
 from .model_loader import get_model
@@ -66,6 +66,8 @@ class ModelRunner(ModelRunner):
         prompt_adapter_config: Optional[PromptAdapterConfig] = None,
         multimodal_config: Optional[MultiModalConfig] = None,
         return_hidden_states: bool = False,
+        return_decode: bool = False,
+        return_prefill: bool = False,
     ):
 
         super().__init__(
@@ -80,7 +82,9 @@ class ModelRunner(ModelRunner):
             is_driver_worker=True,  # a hack
             prompt_adapter_config=prompt_adapter_config,
             multimodal_config=multimodal_config,
-            return_hidden_states=return_hidden_states)
+            return_hidden_states=return_hidden_states,
+            return_prefill = return_prefill,
+            return_decode = return_decode,)
 
         # NOTE(sgm): add for verl
         self.model = model  # this will be replaced by get_model()

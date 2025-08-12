@@ -21,7 +21,7 @@ import vllm.envs as envs
 from vllm.executor.executor_base import ExecutorBase, ExecutorAsyncBase
 from vllm.logger import init_logger
 from vllm.lora.request import LoRARequest
-from vllm.sequence import SamplerOutput, ExecuteModelRequest
+from hidden_vllm.sequence import SamplerOutput, ExecuteModelRequest
 
 from vllm.config import (CacheConfig, DeviceConfig, LoRAConfig, ParallelConfig, SchedulerConfig, SpeculativeConfig,
                          VisionLanguageConfig)

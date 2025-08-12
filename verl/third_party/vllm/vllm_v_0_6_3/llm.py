@@ -21,7 +21,8 @@ from torch.nn.utils.rnn import pad_sequence
 from transformers import PretrainedConfig, PreTrainedTokenizer, PreTrainedTokenizerFast
 from verl.workers.rollout.tokenizer import HybridEngineBaseTokenizer
 from vllm import LLM
-from vllm.outputs import EmbeddingRequestOutput, RequestOutput
+from vllm.outputs import EmbeddingRequestOutput
+from hidden_vllm.outputs import RequestOutput
 from vllm.utils import Counter
 
 from .arg_utils import EngineArgs

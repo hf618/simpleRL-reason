@@ -209,10 +209,10 @@ class FSDPSFTTrainer(object):
         with init_context():
             self.model: PreTrainedModel = AutoModelForCausalLM.from_pretrained(local_model_path,
                                                                                config=config,
-                                                                               torch_dtype=torch.float32,
-                                                                               # attn_implementation='flash_attention_2',
-                                                                               # torch_dtype=torch.float16,
-                                                                               attn_implementation='eager',
+                                                      
+                                                                               attn_implementation='flash_attention_2',
+                                                                               torch_dtype= torch.bfloat16,
+                                                                               # attn_implementation='eager',
                                                                                trust_remote_code=trust_remote_code)
 
             # Apply Liger kernel if use_liger is enabled
@@ -301,7 +301,7 @@ class FSDPSFTTrainer(object):
         context = self.sharding_manager if use_sp else nullcontext()
         with context:
             # with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
-            with torch.autocast(device_type='cuda', dtype=torch.float16):
+            with torch.autocast(device_type='cuda', dtype= torch.bfloat16):
                 if not use_sp:
                     # Standard forward pass without sequence parallel
                     labels = input_ids[:, 1:].contiguous()

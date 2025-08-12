@@ -24,12 +24,12 @@ from vllm.config import (DeviceConfig, ModelConfig, LoRAConfig, ParallelConfig, 
 from vllm.logger import init_logger
 from vllm.model_executor import InputMetadata, SamplingMetadata
 from vllm.sampling_params import SamplingParams, SamplingType
-from vllm.sequence import SamplerOutput, SequenceData, SequenceGroupMetadata
+from hidden_vllm.sequence import SamplerOutput, SequenceData, SequenceGroupMetadata
 from vllm.lora.worker_manager import LRUCacheWorkerLoRAManager
 from vllm.lora.layers import LoRAMapping
 from vllm.lora.request import LoRARequest
 from vllm.utils import in_wsl
-from vllm.worker.model_runner import ModelRunner, CUDAGraphRunner, _async_h2d
+from hidden_vllm.worker.model_runner import ModelRunner, CUDAGraphRunner, _async_h2d
 
 from .model_loader import get_model
 

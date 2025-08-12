@@ -22,7 +22,7 @@ from transformers import PreTrainedModel
 from vllm.config import (CacheConfig, DeviceConfig, LoadConfig, LoRAConfig, ModelConfig, MultiModalConfig,
                          ParallelConfig, SchedulerConfig)
 from vllm.model_executor.model_loader import BaseModelLoader
-from vllm.model_executor.model_loader.loader import _initialize_model
+from hidden_vllm.model_executor.model_loader.loader import _initialize_model
 from vllm.model_executor.model_loader.utils import set_default_torch_dtype
 from vllm.distributed.communication_op import tensor_model_parallel_all_gather
 

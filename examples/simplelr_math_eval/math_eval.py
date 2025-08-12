@@ -71,7 +71,7 @@ def parse_args():
                         type=int, 
                         default=-1,  # -1 表示使用所有样本
                         help="Number of test samples per dataset to use for debugging")
-    parser.add_argument("--dtype", default="torch.float16", type=str, help="Data type for the model (e.g., 'torch.float16', 'torch.bfloat16', 'auto')")
+    parser.add_argument("--dtype", default=" torch.bfloat16", type=str, help="Data type for the model (e.g., 'torch.float16', 'torch.bfloat16', 'auto')")
     parser.add_argument("--gpu_memory_utilization", type=float, default=0.6, help="The fraction of GPU memory to be used by the vLLM engine. 1.0 means use all available memory.")
     
     args = parser.parse_args()
@@ -209,7 +209,7 @@ def setup(args):
             load_in_half=True,
             use_fast_tokenizer=True,
             use_safetensors=args.use_safetensors,
-            dtype=torch.float16,
+            dtype= torch.bfloat16,
         )
 
     # infer & eval

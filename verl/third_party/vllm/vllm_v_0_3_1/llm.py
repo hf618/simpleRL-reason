@@ -22,7 +22,8 @@ import torch.nn as nn
 from .arg_utils import EngineArgs
 from .llm_engine_sp import LLMEngine
 from vllm.lora.request import LoRARequest
-from vllm.outputs import RequestOutput
+# from vllm.outputs import RequestOutput
+from hidden_vllm.outputs import RequestOutput
 from vllm.sampling_params import SamplingParams
 from vllm.utils import Counter
 import torch

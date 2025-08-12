@@ -436,7 +436,7 @@ class EngineArgs:
                 not scheduler_config.use_v2_block_manager):
             raise ValueError("Chunked prefill is not supported with sliding window. "
                              "Set --disable-sliding-window to disable sliding window.")
-
+        # model_config.hf_config 中包含了 return_hidden_states, return_prefill, return_decode
         return EngineConfig(
             model_config=model_config,
             cache_config=cache_config,
@@ -451,3 +451,36 @@ class EngineArgs:
             observability_config=observability_config,
             prompt_adapter_config=prompt_adapter_config,
         )
+
+
+# @dataclass
+# class HiddenstatesConfig:
+#     def __init__(self):
+#         return_hidden_states: bool = False,
+#         return_prefill: bool = False,
+#         return_decode: bool = False
+
+#     def __post_init__(self):
+#         library_name = 'peft'
+#         try:
+#             __import__(library_name)
+#         except ImportError as e:
+#             raise ImportError(
+#                 f"'{library_name}' is not installed for prompt adapter support."
+#                 f"Please install it using 'pip install {library_name}'."
+#             ) from e
+
+#         if self.max_prompt_adapters < 1:
+#             raise ValueError(f"max_prompt_adapters "
+#                              f"({self.max_prompt_adapters}) must be >= 1.")
+#         if self.max_prompt_adapter_token == 0:
+#             raise ValueError("max_prompt_adapter_token must be set.")
+#         if self.max_cpu_prompt_adapters is None:
+#             self.max_cpu_prompt_adapters = self.max_prompt_adapters
+
+#     def verify_with_model_config(self, model_config: ModelConfig):
+#         if self.prompt_adapter_dtype in (None, "auto"):
+#             self.prompt_adapter_dtype = model_config.dtype
+#         elif isinstance(self.prompt_adapter_dtype, str):
+#             self.prompt_adapter_dtype = getattr(torch,
+#                                                 self.prompt_adapter_dtype)

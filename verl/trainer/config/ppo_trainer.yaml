@@ -99,6 +99,9 @@ actor_rollout_ref:
     do_sample: True
     # number of responses (i.e. num sample times)
     n: 4 # > 1 for grpo
+    return_hidden_states: False
+    return_decode: False
+    return_prefill: False
 
 critic:
   strategy: fsdp

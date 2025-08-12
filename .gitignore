@@ -127,4 +127,4 @@ model_scope_model
 /custom/
 /wandb_my/
 # 忽略specific文件
-train_grpo_math_tune_ray.sh
+

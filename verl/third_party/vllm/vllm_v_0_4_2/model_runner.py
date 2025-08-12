@@ -25,9 +25,9 @@ from vllm.lora.layers import LoRAMapping
 from vllm.lora.request import LoRARequest
 from vllm.lora.worker_manager import LRUCacheWorkerLoRAManager
 from vllm.model_executor import SamplingMetadata
-from vllm.sequence import (MultiModalData, SamplerOutput, SequenceData, SequenceGroupMetadata)
+from hidden_vllm.sequence import (MultiModalData, SamplerOutput, SequenceData, SequenceGroupMetadata)
 from vllm.utils import (CudaMemoryProfiler, is_hip, is_pin_memory_available)
-from vllm.worker.model_runner import ModelRunner, CUDAGraphRunner
+from hidden_vllm.worker.model_runner import ModelRunner, CUDAGraphRunner
 
 from .model_loader import get_model
 from .config import ModelConfig, LoadConfig

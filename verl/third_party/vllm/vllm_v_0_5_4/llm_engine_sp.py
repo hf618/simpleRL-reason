@@ -20,7 +20,7 @@ import vllm.envs as envs
 from vllm.config import (CacheConfig, DecodingConfig, DeviceConfig, EngineConfig, LoRAConfig, MultiModalConfig,
                          ObservabilityConfig, ParallelConfig, PromptAdapterConfig, SchedulerConfig, SpeculativeConfig)
 from vllm.core.scheduler import Scheduler
-from vllm.engine.output_processor.interfaces import (SequenceGroupOutputProcessor)
+from hidden_vllm.engine.output_processor.interfaces import (SequenceGroupOutputProcessor)
 from vllm.engine.output_processor.stop_checker import StopChecker
 from vllm.executor.executor_base import ExecutorBase
 from vllm.inputs import INPUT_REGISTRY, LLMInputs, PromptInputs
@@ -31,7 +31,7 @@ from vllm.tracing import (SpanAttributes, SpanKind, extract_trace_context, init_
 from vllm.usage.usage_lib import (UsageContext, is_usage_stats_enabled, usage_message)
 from vllm.utils import Counter
 from vllm.engine.llm_engine import _load_generation_config_dict
-from vllm.engine.llm_engine import LLMEngine
+from hidden_vllm.engine.llm_engine import LLMEngine
 from vllm.version import __version__ as VLLM_VERSION
 
 import torch.nn as nn
@@ -300,6 +300,7 @@ class LLMEngine(LLMEngine):
     ) -> "LLMEngine":
         """Creates an LLM engine from the engine arguments."""
         # Create the engine configs.
+        #  
         engine_config = engine_args.create_engine_config()
         executor_class = cls._get_executor_cls(engine_config)
         # Initialize the cluster and specify the executor class.

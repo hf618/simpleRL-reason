@@ -40,7 +40,7 @@ calculate_metrics="false"
 metrics_to_calc=""
 metric_stride=1
 num_test_sample_per_dataset=-1  # 默认值
-dtype="torch.float16"
+dtype=" torch.bfloat16"
 run_collect_results="true"
 gpu_memory_utilization=1.0
 

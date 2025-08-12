@@ -23,13 +23,13 @@ import torch.nn as nn
 
 from vllm.config import (CacheConfig, DeviceConfig, LoRAConfig, ParallelConfig, SchedulerConfig, VisionLanguageConfig)
 from vllm.model_executor import set_random_seed
-from vllm.sequence import SamplerOutput, ExecuteModelRequest
+from hidden_vllm.sequence import SamplerOutput, ExecuteModelRequest
 from vllm.worker.cache_engine import CacheEngine
 from vllm.distributed.device_communicators import pynccl_utils
 from vllm.distributed.device_communicators.custom_all_reduce import (init_custom_ar)
 # TODO(sgm): check why vllm has similar file in vllm.model_executor.parallel_utils.parallel_state
 from vllm.distributed import get_tensor_model_parallel_cpu_group, init_distributed_environment, get_tensor_model_parallel_group
-from vllm.worker.worker import Worker, _check_if_gpu_supports_dtype
+from hidden_vllm.worker.worker import Worker, _check_if_gpu_supports_dtype
 
 from .model_runner import ModelRunner
 from .megatron_weight_loaders import load_megatron_weights

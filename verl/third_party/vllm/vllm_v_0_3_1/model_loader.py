@@ -28,7 +28,7 @@ from .config import ModelConfig
 from vllm.config import DeviceConfig, LoRAConfig
 from .weight_loaders import *
 from vllm.model_executor.sampling_metadata import SamplingMetadata, SamplingTensors
-from vllm.sequence import SamplerOutput
+from hidden_vllm.sequence import SamplerOutput
 from typing import Optional
 from vllm.model_executor.layers.sampler import Sampler
 from vllm.model_executor.layers.sampler import _prune_hidden_states, _apply_logits_processors, _apply_penalties, _apply_top_k_top_p, _apply_min_p, _apply_penalties, _sample, _get_logprobs, _build_sampler_output
