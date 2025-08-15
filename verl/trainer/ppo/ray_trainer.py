@@ -117,10 +117,9 @@ def apply_kl_penalty(data: DataProto, kl_ctrl: core_algos.AdaptiveKLController, 
 
     return data, metrics
 
-
-def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_repeat=1):
-    # prepare response group
-    # TODO: add other ways to estimate advantages
+def compute_advantage(data: DataProto, config, adv_estimator, gamma=1.0, lam=1.0, num_repeat=1):
+    # 准备响应组
+    # TODO: 添加其他优势估计方法
     if adv_estimator == 'gae':
         values = data.batch['values']
         responses = data.batch['responses']
@@ -128,13 +127,15 @@ def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_re
         attention_mask = data.batch['attention_mask']
         response_mask = attention_mask[:, -response_length:]
         token_level_rewards = data.batch['token_level_rewards']
-        advantages, returns = core_algos.compute_gae_advantage_return(token_level_rewards=token_level_rewards,
+
+        advantages_0, returns = core_algos.compute_gae_advantage_return(token_level_rewards=token_level_rewards,
                                                                       values=values,
                                                                       eos_mask=response_mask,
                                                                       gamma=gamma,
                                                                       lam=lam)
-        data.batch['advantages'] = advantages
-        data.batch['returns'] = returns
+        data.batch['advantages_0'] = advantages_0
+
+        data.batch['returns'] = returns # 返回值 'returns' 保持不变
     elif adv_estimator == 'grpo':
         token_level_rewards = data.batch['token_level_rewards']
         index = data.non_tensor_batch['uid']
@@ -142,13 +143,38 @@ def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_re
         response_length = responses.size(-1)
         attention_mask = data.batch['attention_mask']
         response_mask = attention_mask[:, -response_length:]
-        advantages, returns = core_algos.compute_grpo_outcome_advantage(token_level_rewards=token_level_rewards,
+
+        advantages_0, returns = core_algos.compute_grpo_outcome_advantage(token_level_rewards=token_level_rewards,
                                                                         eos_mask=response_mask,
                                                                         index=index)
-        data.batch['advantages'] = advantages
+        data.batch['advantages_0'] = advantages_0
         data.batch['returns'] = returns
     else:
         raise NotImplementedError
+
+
+    if config.reward_manager.add_reward and config.algorithm.get('add_adv', False):
+        if 'aux_rewards' in data.batch:
+            kappa = config.algorithm.get('adv_shaping_kappa', 2.0)
+            adv_0 = data.batch['advantages_0']
+            aux = data.batch['aux_rewards']
+
+            # --- Modified Clipped Additive Shaping ---
+            # 1. We only consider positive aux_rewards as a bonus
+            bonus = torch.nn.functional.relu(aux)
+
+            # 2. The clipping threshold now includes epsilon to handle A=0 cases
+            clipping_threshold = (adv_0.abs()) / kappa
+
+            # 3. Clip the bonus and add it to the original advantage
+            clipped_bonus = torch.min(bonus, clipping_threshold)
+
+            data.batch['advantages'] = adv_0 + clipped_bonus
+        else:
+            data.batch['advantages'] = data.batch['advantages_0']
+    else:
+        data.batch['advantages'] = data.batch['advantages_0']
+
     return data
 
 
@@ -256,6 +282,7 @@ def compute_data_metrics(batch, use_critic=True):
     sequence_reward = batch.batch['token_level_rewards'].sum(-1)
 
     advantages = batch.batch['advantages']
+    advantages_0 = batch.batch.get('advantages_0', advantages) # 如果不存在则回退到 advantages
     returns = batch.batch['returns']
 
     max_response_length = batch.batch['responses'].shape[-1]
@@ -270,6 +297,7 @@ def compute_data_metrics(batch, use_critic=True):
     response_length = response_info['response_length']
 
     valid_adv = torch.masked_select(advantages, response_mask)
+    valid_adv_0 = torch.masked_select(advantages_0, response_mask)
     valid_returns = torch.masked_select(returns, response_mask)
 
     if use_critic:
@@ -307,6 +335,13 @@ def compute_data_metrics(batch, use_critic=True):
             torch.max(valid_adv).detach().item(),
         'critic/advantages/min':
             torch.min(valid_adv).detach().item(),
+        # adv_0
+        'critic/advantages_0/mean':
+            torch.mean(valid_adv_0).detach().item(),
+        'critic/advantages_0/max':
+            torch.max(valid_adv_0).detach().item(),
+        'critic/advantages_0/min':
+            torch.min(valid_adv_0).detach().item(),
         # returns
         'critic/returns/mean':
             torch.mean(valid_returns).detach().item(),
@@ -1283,11 +1318,23 @@ class RayPPOTrainer(object):
                         # 计算 rewards 输出一个字典
                         reward_tensor_dict: dict = self.reward_fn(batch, is_val=False, metrics_old=metrics_old)
 
+                        # 检查是否启用了奖励相加和优势值放缩
+                        if self.config.reward_manager.add_reward and self.config.algorithm.get('add_adv', False):
+                            # 1. 计算并存储辅助奖励，用于后续的放缩
+                            aux_rewards = reward_tensor_dict['reward_tensor'] - reward_tensor_dict['reward_tensor_0']
+                            batch.batch['aux_rewards'] = aux_rewards
+                            
+                            # 2. 【关键修正点】
+                            # 将 token_level_scores 设置为 *任务奖励*，
+                            # 以确保 advantages_0 是基于任务奖励计算的
+                            batch.batch['token_level_scores'] = reward_tensor_dict['reward_tensor_0']
+                        else:
+                            # 原始行为：当不启用优势放缩时，使用总奖励进行计算
+                            batch.batch['token_level_scores'] = reward_tensor_dict['reward_tensor']
                         
+                        # 这两行保持不变，用于记录原始分数和正确性
                         batch.batch['token_level_scores_0'] = reward_tensor_dict['reward_tensor_0']
-                        batch.batch['token_level_scores'] = reward_tensor_dict['reward_tensor']
                         batch.batch['correctness'] = reward_tensor_dict['correctness_tensor']
-
 
                         # 接收并处理来自 RewardManager 的内部指标 #
                         internal_reward_metrics = reward_tensor_dict.get('internal_metrics', {})
@@ -1307,6 +1354,7 @@ class RayPPOTrainer(object):
                         
                         # compute advantages, executed on the driver process
                         batch = compute_advantage(batch,
+                                                  config=self.config,
                                                   adv_estimator=self.config.algorithm.adv_estimator,
                                                   gamma=self.config.algorithm.gamma,
                                                   lam=self.config.algorithm.lam,

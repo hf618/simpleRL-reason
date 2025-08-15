@@ -33,7 +33,7 @@ def compute_single_entropy(hidden: torch.Tensor, alpha: float = 1.0001, matrix_t
     except torch._C._LinAlgError:
         return 0.0
 
-def compute_single_effective_rank(hidden: torch.Tensor, svd_rank: int, log_output: bool = False, method: str = 'lowrank') -> float:
+def compute_single_effective_rank(hidden: torch.Tensor, svd_rank: int, svd_niter: int, log_output: bool = False, method: str = 'lowrank') -> float:
     """计算单个样本的有效秩，支持 'lowrank' 和 'full' 两种SVD方法"""
     assert method in ['lowrank', 'full'], "SVD method must be 'lowrank' or 'full'"
     if hidden.size(0) < 2: return 0.0
@@ -43,7 +43,7 @@ def compute_single_effective_rank(hidden: torch.Tensor, svd_rank: int, log_outpu
         centered = centered.to(torch.float32)
         S = None
         if method == 'lowrank':
-            _, S, _ = torch.svd_lowrank(centered, q=min(svd_rank, min(centered.shape)))
+            _, S, _ = torch.svd_lowrank(centered, q=min(svd_rank, min(centered.shape)), niter=svd_niter) # 添加 niter 参数
         else: # 'full'
             _, S, _ = torch.linalg.svd(centered, full_matrices=False)
             
@@ -75,13 +75,13 @@ def compute_single_curvature(hidden: torch.Tensor) -> float:
     return 0.0
 
 def calculate_diffs_for_single_sample(valid_hidden, max_seq_len, stride, selected_metric_names, 
-                                      svd_rank, svd_method):
+                                      svd_rank, svd_niter, svd_method): # 增加 svd_niter 参数
     """为单个样本的隐藏状态计算所有选定指标的一阶和二阶差分。"""
     metric_calculators = {
         "Response Entropy 1": lambda h: compute_single_entropy(h, 1.0001, "gram"),
-        "Effective Rank": lambda h: compute_single_effective_rank(h, svd_rank, log_output=False, method=svd_method),
         "Curvature": lambda h: compute_single_curvature(h),
-        "Log Effective Rank": lambda h: compute_single_effective_rank(h, svd_rank, log_output=True, method=svd_method)
+        "Effective Rank": lambda h: compute_single_effective_rank(h, svd_rank, svd_niter, log_output=False, method=svd_method), # 传递新参数
+        "Log Effective Rank": lambda h: compute_single_effective_rank(h, svd_rank, svd_niter, log_output=True, method=svd_method) # 传递新参数
     }
     # ... (函数其余部分保持不变) ...
     active_calculators = [metric_calculators[name] for name in selected_metric_names if name in metric_calculators]

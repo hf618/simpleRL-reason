@@ -135,8 +135,10 @@ def main_task(config, compute_score=None):
                                                  compute_log_effective_rank=config.calculator.compute_log_effective_rank,
                                                  metric_indices=config.calculator.get('metric_indices', None),
                                                  output_token_level_metrics=config.calculator.output_token_level_metrics,
-                                                zeroth_order_svd_method='full',   # 0阶用 full
-                                                diff_svd_method='lowrank'       # diff 用 full
+                                                svd_rank=config.calculator.svd_rank, 
+                                                 svd_niter=config.calculator.svd_niter,
+                                                 zeroth_order_svd_method=config.calculator.zeroth_order_svd_method, 
+                                                 diff_svd_method=config.calculator.diff_svd_method 
                                         )
 
 
@@ -155,6 +157,8 @@ def main_task(config, compute_score=None):
                               output_token_level_metrics=config.calculator.output_token_level_metrics,
                               aux_reward_global_weight=config.reward_manager.aux_reward_global_weight,
                               token_level_baseline_type=config.reward_manager.token_level_baseline_type,
+                              aux_fix=config.reward_manager.aux_fix,
+                              hypothesis_type=config.reward_manager.hypothesis_type
                             )
     
     # Note that we always use function-based RM for validation
@@ -173,6 +177,8 @@ def main_task(config, compute_score=None):
                                     output_token_level_metrics=config.calculator.output_token_level_metrics,
                                     aux_reward_global_weight=config.reward_manager.aux_reward_global_weight,
                                     token_level_baseline_type=config.reward_manager.token_level_baseline_type,
+                                    aux_fix=config.reward_manager.aux_fix,
+                                    hypothesis_type=config.reward_manager.hypothesis_type
                                   )
 
 

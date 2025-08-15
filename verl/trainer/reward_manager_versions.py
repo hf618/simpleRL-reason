@@ -60,7 +60,7 @@ def _calculate_reward_for_single_sample(
     data_item, index, tokenizer, compute_score, use_aux_reward, indicator_names, 
     mids, weights_explore, weights_exploit, modulation_gain, epsilon, 
     performance_scaling_factor, act_func, adv_estimator, output_token_level_metrics,
-    token_level_baseline_type
+    token_level_baseline_type, aux_fix 
     ):
     """
     为单个样本计算核心奖励和辅助奖励。
@@ -172,7 +172,7 @@ class RewardCalculatorActor:
     一个多功能的 Ray Actor，经过优化，可以批量处理计算任务。
     """
     # --- 修复点 (1/4): 在 __init__ 中接收完整的配置 ---
-    def __init__(self, tokenizer, num_examine, compute_score, adv_estimator, output_token_level_metrics, token_level_baseline_type):
+    def __init__(self, tokenizer, num_examine, compute_score, adv_estimator, output_token_level_metrics, token_level_baseline_type, aux_fix):
         self.tokenizer = tokenizer
         self.num_examine = num_examine
         self.compute_score = compute_score
@@ -180,6 +180,7 @@ class RewardCalculatorActor:
         self.adv_estimator = adv_estimator
         self.output_token_level_metrics = output_token_level_metrics
         self.token_level_baseline_type = token_level_baseline_type
+        self.aux_fix = aux_fix
 
     # --- 隐藏优化 (2/4): 修改方法以处理一批样本 (chunk) ---
     def process_sample_chunk(self, chunk_of_args):
@@ -211,7 +212,8 @@ class RewardCalculatorActor:
                 act_func=act_func,
                 adv_estimator=self.adv_estimator,
                 output_token_level_metrics=self.output_token_level_metrics,
-                token_level_baseline_type=self.token_level_baseline_type
+                token_level_baseline_type=self.token_level_baseline_type,
+                aux_fix=self.aux_fix
             )
 
             results_chunk.append(single_result)
@@ -242,7 +244,9 @@ class RewardManager():
                  aux_reward_global_weight=1.0,
                  adv_estimator='grpo',
                  output_token_level_metrics=False,
-                 token_level_baseline_type='internal_mean'):
+                 token_level_baseline_type='internal_mean',
+                 aux_fix=False,
+                 hypothesis_type: str = "PlanA"):
         self.tokenizer = tokenizer
         self.num_examine = num_examine
         self.compute_score = compute_score or _default_compute_score
@@ -264,9 +268,12 @@ class RewardManager():
         # Initialized to 0.0, representing a neutral average score.
         self.ema_performance_score = 0.0 
         self.aux_reward_global_weight = aux_reward_global_weight
+        self.aux_fix = aux_fix
         self.adv_estimator = adv_estimator
         self.output_token_level_metrics = output_token_level_metrics
         self.token_level_baseline_type = token_level_baseline_type
+        self.hypothesis_type = hypothesis_type
+        
         print(f"[RewardManager] Initialized with token-level baseline type: {self.token_level_baseline_type}")
         
 
@@ -321,9 +328,15 @@ class RewardManager():
 
         # ### 修改点1: EMA更新逻辑已移至末尾，此处不再需要 ###
         if use_aux_reward:
-            # 仅计算用于当前步骤的缩放因子
-            normalized_performance = (self.ema_performance_score + 1.0) / 2.0
-            performance_scaling_factor = self.aux_reward_global_weight * (1.0 - normalized_performance)
+            if self.aux_fix:
+                # 如果 aux_fix 为 True，使用固定值
+                performance_scaling_factor = self.aux_reward_global_weight
+                print(f"Using fixed performance_scaling_factor: {performance_scaling_factor}")
+            else:
+                # 否则，使用动态计算逻辑
+                normalized_performance = (self.ema_performance_score + 1.0) / 2.0
+                performance_scaling_factor = self.aux_reward_global_weight * (1.0 - normalized_performance)
+                print(f"Using dynamic performance_scaling_factor: {performance_scaling_factor}")
             internal_metrics['performance_scaling_factor'].append(performance_scaling_factor)
 
      
@@ -384,18 +397,21 @@ class RewardManager():
                 w_exploit = torch.tensor(self.weights_exploit, device=data.batch.device)
 
 
-                # --- 实验一：测试假说A (高diff 2 = 利用) ---
-                # 变量名清晰地反映了它的作用
-                exploit_tendency = torch.sigmoid(self.modulation_gain * percentage_deviation)
-                # 当exploit_tendency趋近1时，权重偏向w_exploit
-                dynamic_weights = (1.0 - exploit_tendency) * w_explore +  exploit_tendency * w_exploit
+                if self.hypothesis_type == "PlanA":
+                    # 假说A：高 diff 2 -> 利用 (w_exploit)
+                    exploit_tendency = torch.sigmoid(self.modulation_gain * percentage_deviation)
+                    dynamic_weights = (1.0 - exploit_tendency) * w_explore + exploit_tendency * w_exploit
+                    # 记录 exploit_tendency
+                    internal_metrics['exploit_tendency'].append(exploit_tendency.item())
+                elif self.hypothesis_type == "PlanB":
+                    # 假说B：高 diff 2 -> 探索 (w_explore) close to the RUC
+                    explore_tendency = torch.sigmoid(self.modulation_gain * percentage_deviation)
+                    dynamic_weights = explore_tendency * w_explore + (1.0 - explore_tendency) * w_exploit
+                    # 记录 explore_tendency
+                    internal_metrics['explore_tendency'].append(explore_tendency.item())
+                else:
+                    raise ValueError(f"Invalid hypothesis_type: {self.hypothesis_type}. Must be 'PlanA' or 'PlanB'.")
 
-
-                # # --- 实验二：测试假说B (高diff 2 = 探索) ---
-                # # 变量名也清晰地反映了它的作用
-                # explore_tendency = torch.sigmoid(self.modulation_gain * percentage_deviation)
-                # # 当explore_tendency趋近1时，权重偏向w_explore
-                # dynamic_weights = explore_tendency * w_explore + (1.0 - explore_tendency) * w_exploit
                 
                 # Create a lookup for easier access
                 weights_map = {name: weight for name, weight in zip(self.indicator_names, dynamic_weights)}
@@ -500,7 +516,8 @@ class RewardManager_parallel():
                  aux_reward_global_weight=1.0,
                  adv_estimator='grpo',
                  output_token_level_metrics=False,
-                 token_level_baseline_type='internal_mean'):
+                 token_level_baseline_type='internal_mean',
+                 aux_fix=False):
         
         self.tokenizer = tokenizer
         self.num_examine = num_examine
@@ -527,6 +544,7 @@ class RewardManager_parallel():
         available_cpus = ray.available_resources().get("CPU", 1)
         self.num_actors = min(2, int(available_cpus - 1))
         print(f" -> Ray reports {available_cpus} CPUs available. Creating Actor Pool with {self.num_actors} actors.")
+        self.aux_fix = aux_fix
         
         actors = [RewardCalculatorActor.remote(
             self.tokenizer, 
@@ -534,7 +552,8 @@ class RewardManager_parallel():
             self.compute_score, 
             self.adv_estimator, 
             self.output_token_level_metrics,
-            self.token_level_baseline_type # 传递新参数
+            self.token_level_baseline_type,
+            self.aux_fix
             ) for _ in range(self.num_actors)]
         self.actor_pool = ActorPool(actors)
 
@@ -561,9 +580,14 @@ class RewardManager_parallel():
         act_func = nn.Tanh() if use_aux_reward else None
 
         if use_aux_reward:
-            normalized_performance = (self.ema_performance_score + 1.0) / 2.0
-            performance_scaling_factor = self.aux_reward_global_weight * (1.0 - normalized_performance)
-            internal_metrics['performance_scaling_factor'] = [performance_scaling_factor]
+            # >>> 修改点: 根据 aux_fix 控制缩放因子的计算方式 <<<
+            if self.aux_fix:
+                performance_scaling_factor = self.aux_reward_global_weight
+            else:
+                normalized_performance = (self.ema_performance_score + 1.0) / 2.0
+                performance_scaling_factor = self.aux_reward_global_weight * (1.0 - normalized_performance)
+            internal_metrics['performance_scaling_factor'].append(performance_scaling_factor)
+
 
         all_tasks_args = []
         for i in range(len(data)):

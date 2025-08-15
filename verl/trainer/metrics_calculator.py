@@ -18,6 +18,7 @@ class RepresentationMetricsCalculator():
                  zeroth_order_svd_method: str = 'full',
                  diff_svd_method: str = 'lowrank',
                  svd_rank: int = 6,
+                 svd_niter: int = 5,
                  compute_log_effective_rank: bool = False,
                  ):
         """
@@ -43,6 +44,7 @@ class RepresentationMetricsCalculator():
         self.zeroth_order_svd_method = zeroth_order_svd_method
         self.diff_svd_method = diff_svd_method
         self.svd_rank = svd_rank
+        self.svd_niter = svd_niter
 
         # 定义所有可用的基础指标和它们的计算函数
         all_base_metrics = [
@@ -181,9 +183,9 @@ class RepresentationMetricsCalculator():
 
             # 在这里传递 diff_svd_method
             per_stride_diffs_i = metrics_utils.calculate_diffs_for_single_sample(
-                valid_hidden, self.max_seq_len, stride, selected_metric_names, 
-                self.svd_rank, self.diff_svd_method # 使用为diff指定的SVD方法
-            )
+                                    valid_hidden, self.max_seq_len, stride, selected_metric_names, 
+                                    self.svd_rank, self.svd_niter, self.diff_svd_method # 传递新参数
+                                )
             
             # ... (聚合逻辑不变) ...
             for name in selected_metric_names:
@@ -264,10 +266,10 @@ class RepresentationMetricsCalculator():
             mask = attention_mask[i].bool()
             valid_hidden = hidden_states[i, mask, :]  # [valid_seq_len, hidden_dim]
             
-            # 为每个样本调用单一计算函数
+            # 为每个样本调用单一计算函
             ranks[i] = metrics_utils.compute_single_effective_rank(
-                valid_hidden, self.svd_rank, log_output, self.zeroth_order_svd_method # 使用为0阶指标指定的SVD方法
-            )
+        valid_hidden, self.svd_rank, self.svd_niter, log_output, self.zeroth_order_svd_method # 传递新参数
+                )
         return ranks
       
     def calculate_curvature(self, hidden_states: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:

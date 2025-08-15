@@ -169,6 +169,8 @@ algorithm:
   kl_ctrl:
     type: fixed
     kl_coef: 0.001
+  add_adv: True
+  adv_shaping_kappa: 2.0
 
 trainer:
   total_epochs: 1
@@ -191,8 +193,6 @@ trainer:
   val_before_train: True   # Controla si se ejecuta la validación antes del entrenamiento
   val_sample_size: -1      # Número de muestras a usar para la validación. -1 para usar el dataset completo.
 
-
-# <<< 新增部分开始 >>>
 reward_manager:
   ema_alpha: 0.7
   indicator_names: ['Response Entropy 1 diff 2', 'Response Entropy 1 diff', 'Response Entropy 1']
@@ -202,12 +202,17 @@ reward_manager:
   modulation_gain: 1.5
   aux_reward_global_weight: 1.0
   token_level_baseline_type: 'internal_mean' # 可选值: 'internal_mean' (新思路) 或 'external_ema' (老办法)
+  aux_fix: False
+  hypothesis_type: "planA"
 
 calculator:
-  # Stride para el cálculo de diferencias en las métricas de representación.
   diff_stride: 20
   enable: True
   compute_log_effective_rank: False
   metric_indices: [0, 1, 2]
-  output_token_level_metrics: False # If True, the calculator will output token-level metrics.
+  output_token_level_metrics: False 
+  svd_rank: 50
+  svd_niter: 5
+  zeroth_order_svd_method: 'full' 
+  diff_svd_method: 'full'
   

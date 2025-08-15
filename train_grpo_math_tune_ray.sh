@@ -3,41 +3,26 @@
 USER_ENV=`whoami`
 set -x
 FULL_ARGS="$@"
-# export NCCL_DEBUG=DEBUG
-export RAY_BACKEND_LOG_LEVEL=debug
-export RAY_DEDUP_LOGS=1
 
-export PROJECT_NAME=verl_train_gong
-export WANDB_API_KEY=8c84ddd422687515e5df25109f349a4f2c5df884
-export WANDB_OFFICIAL=1
-export VLLM_ATTENTION_BACKEND=FLASH_ATTN # FLASHINFER # XFORMERS
-export HDFS_DATA_PATH=/home/root1/Fanding/simpleRL-reason/custom/data
-export HDFS_MODEL_PATH=/media/root1/4t/Models
-export HDFS_CHECKPOINT_PATH=/home/root1/Fanding/simpleRL-reason/custom/checkpoint
-export HDFS_LOG_PATH=/home/root1/Fanding/simpleRL-reason/custom/log
-export RUN_NAME=verl-grpo
-export ARNOLD_WORKER_NUM=1 # number of nodes you want to use 
+# The machine-specific variables are now inherited from the calling script's environment.
+# Default values are provided for key variables to ensure the script can run standalone for debugging.
+PROJECT_NAME=${PROJECT_NAME:-"verl_train_gong"}
+RUN_NAME=${RUN_NAME:-"verl-grpo"}
+HDFS_DATA_PATH=${HDFS_DATA_PATH:-"/path/to/your/data"}
+HDFS_MODEL_PATH=${HDFS_MODEL_PATH:-"/path/to/your/models"}
+HDFS_CHECKPOINT_PATH=${HDFS_CHECKPOINT_PATH:-"./checkpoint"}
+HDFS_LOG_PATH=${HDFS_LOG_PATH:-"./log"}
+ARNOLD_WORKER_NUM=${ARNOLD_WORKER_NUM:-1}
+NUM_GPUS=${NUM_GPUS:-2}
+HEAD_IP=${HEAD_IP:-"127.0.0.1"}
+HEAD_PORT=${HEAD_PORT:-"6379"}
+WORKING_DIR=${WORKING_DIR:-"."}
 
-export RAY_OVERRIDE_JOB_RUNTIME_ENV=1
-export CUDA_LAUNCH_BLOCKING=1  # 同步CUDA错误
-export NCCL_DEBUG=INFO          # 启用NCCL详细日志
-export NCCL_SOCKET_IFNAME=enp2s0 # 指定网卡（根据ifconfig替换）
+# The runtime environment JSON is now also passed from the parent script
+# If it's not present, we create a minimal default for standalone execution
+DEFAULT_RUNTIME_ENV_JSON='{"working_dir": "'${WORKING_DIR}'", "env_vars": { "WANDB_API_KEY": "'${WANDB_API_KEY}'" }}'
+RAY_RUNTIME_ENV_JSON=${RAY_RUNTIME_ENV_JSON:-$DEFAULT_RUNTIME_ENV_JSON}
 
-export RAY_pickling_fallback="True"
-export PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python
-
-export CUDA_VISIBLE_DEVICES="0,1"  # 只使用 GPU 0 和 1
-export RAY_DEBUG=legacy
-export REWORD_FUNCTION_TYPE="independent"
-export TORCH_USE_CUDA_DSA=1
-export NCCL_DEBUG=INFO
-export TORCH_DISTRIBUTED_DEBUG=DETAIL
-
-
-WORKING_DIR="."
-NUM_GPUS=2
-HEAD_IP="219.223.186.53"
-HEAD_PORT="6379"
 DATASET_NAME=simplelr_qwen_level1to4
 
 # Default values
@@ -93,6 +78,16 @@ TOKEN_LEVEL_BASELINE_TYPE="internal_mean"
 RETURN_HIDDEN_STATES=False
 RETURN_PREFILL=True
 RETURN_DECODE=True
+
+ADD_ADV=True
+AUX_FIX=False
+ADV_SHAPING_KAPPA=2.0
+SVD_RANK=50
+SVD_NITER=5
+
+ZEROTH_ORDER_SVD_METHOD="full" 
+DIFF_SVD_METHOD="lowrank" 
+HYPOTHESIS_TYPE="PlanA" 
 generate_suffix() {
   local suffix=""
   local dataset_provided=false
@@ -117,9 +112,7 @@ generate_suffix() {
       --kl_coef) suffix+="_klcontrol$2"; shift 2 ;;
       --total_epochs) suffix+="_epochs$2"; shift 2 ;;
       --rollout_gpu_memory_util) shift 2 ;;
-      # --- 重点检查这一行 ---
       --dataset_name) suffix+="_$2"; dataset_provided=true; shift 2 ;;
-      # ---------------------
       --remove_clip) suffix+="_remove_clip$2"; shift 2 ;;
       --suffix) input_suffix="$2"; suffix_provided=true; shift 2 ;;
       --logger_config) LOGGER_CONFIG="$2"; shift 2 ;;
@@ -187,7 +180,6 @@ while [[ "$#" -gt 0 ]]; do
     --suffix) SUFFIX="$2"; shift 2 ;;
     --logger_config) LOGGER_CONFIG="$2"; shift 2 ;;
     --exp_name) EXP_NAME="$2"; shift 2 ;;
-    # <<< 新增参数解析 >>>
     --reward_ema_alpha) REWARD_EMA_ALPHA="$2"; shift 2 ;;
     --reward_indicator_names) REWARD_INDICATOR_NAMES="$2"; shift 2 ;;
     --reward_weights) REWARD_WEIGHTS="$2"; shift 2 ;;
@@ -197,6 +189,7 @@ while [[ "$#" -gt 0 ]]; do
     --diff_stride) DIFF_STRIDE="$2"; shift 2 ;;
     --enable_calculator) ENABLE_CALCULATOR="$2"; shift 2 ;;
     --add_reward) ADD_REWARD="$2"; shift 2 ;;
+    --add_adv) ADD_ADV="$2"; shift 2 ;;
     --compute_log_effective_rank) COMPUTE_LOG_EFFECTIVE_RANK="$2"; shift 2 ;;
     --metric_indices) METRIC_INDICES="$2"; shift 2 ;;
     --modulation_gain) MODULATION_GAIN="$2"; shift 2 ;;
@@ -208,6 +201,13 @@ while [[ "$#" -gt 0 ]]; do
     --return_hidden_states) RETURN_HIDDEN_STATES="$2"; shift 2 ;;
     --return_prefill) RETURN_PREFILL="$2"; shift 2 ;;
     --return_decode) RETURN_DECODE="$2"; shift 2 ;;
+    --aux_fix) AUX_FIX="$2"; shift 2 ;;
+    --adv_shaping_kappa) ADV_SHAPING_KAPPA="$2"; shift 2 ;;
+    --svd_rank) SVD_RANK="$2"; shift 2 ;;
+    --svd_niter) SVD_NITER="$2"; shift 2 ;;
+    --zeroth_order_svd_method) ZEROTH_ORDER_SVD_METHOD="$2"; shift 2 ;; 
+    --diff_svd_method) DIFF_SVD_METHOD="$2"; shift 2 ;;
+    --hypothesis_type) HYPOTHESIS_TYPE="$2"; shift 2 ;;
     *)
       echo "Unknown option: $1"
       exit 1
@@ -237,6 +237,7 @@ else
   echo "错误：无效的 adv_estimator: $ADV_ESTIMATOR. 请选择 'grpo' 或 'gae'."
   exit 1
 fi
+
 
 # 检查：如果 RETURN_PREFILL 或 RETURN_DECODE 中任何一个为 True，
 # 那么 RETURN_HIDDEN_STATES 也必须为 True。
@@ -310,13 +311,11 @@ echo "Enable Calculator Metrics: $ENABLE_CALCULATOR"
 echo "Add Reward enabled: $ADD_REWARD"
 echo "Compute Log Effective Rank: $COMPUTE_LOG_EFFECTIVE_RANK"
 echo "LOG FILE PATH: $LOG_FILE_PATH"
-# <<< 修改点 2: 构建 hydra 参数数组 >>>
-# 将覆盖参数作为独立元素添加到数组中
+
 if [ -n "$REWARD_EMA_ALPHA" ]; then
   HYDRA_OVERRIDES+=("reward_manager.ema_alpha=$REWARD_EMA_ALPHA")
 fi
 if [ -n "$REWARD_INDICATOR_NAMES" ]; then
-  # 这里直接使用变量，不添加额外的引号
   HYDRA_OVERRIDES+=("reward_manager.indicator_names=$REWARD_INDICATOR_NAMES")
 fi
 if [ -n "$REWARD_WEIGHTS" ]; then
@@ -340,11 +339,9 @@ fi
 if [ -n "$OUTPUT_TOKEN_LEVEL_METRICS" ]; then
   HYDRA_OVERRIDES+=("calculator.output_token_level_metrics=$OUTPUT_TOKEN_LEVEL_METRICS")
 fi
-# --- 新增：传递 Critic 模型路径 (需求2) ---
 if [ -n "$CRITIC_MODEL_PATH" ]; then
   HYDRA_OVERRIDES+=("critic.model.path=$CRITIC_MODEL_PATH")
 fi
-# v-- 在这里添加下面的代码块 --v
 if [ -n "$TOKEN_LEVEL_BASELINE_TYPE" ]; then
   HYDRA_OVERRIDES+=("reward_manager.token_level_baseline_type=$TOKEN_LEVEL_BASELINE_TYPE")
 fi
@@ -357,30 +354,33 @@ fi
 if [ -n "$RETURN_DECODE" ]; then
   HYDRA_OVERRIDES+=("actor_rollout_ref.rollout.return_decode=$RETURN_DECODE")
 fi
+if [ -n "$ADD_ADV" ]; then
+  HYDRA_OVERRIDES+=("algorithm.add_adv=$ADD_ADV")
+fi
+if [ -n "$AUX_FIX" ]; then
+  HYDRA_OVERRIDES+=("reward_manager.aux_fix=$AUX_FIX")
+fi
+if [ -n "$ADV_SHAPING_KAPPA" ]; then
+HYDRA_OVERRIDES+=("algorithm.adv_shaping_kappa=$ADV_SHAPING_KAPPA")
+fi
+if [ -n "$SVD_RANK" ]; then
+  HYDRA_OVERRIDES+=("calculator.svd_rank=$SVD_RANK")
+fi
+if [ -n "$SVD_NITER" ]; then
+  HYDRA_OVERRIDES+=("calculator.svd_niter=$SVD_NITER")
+fi
+if [ -n "$ZEROTH_ORDER_SVD_METHOD" ]; then
+  HYDRA_OVERRIDES+=("calculator.zeroth_order_svd_method=$ZEROTH_ORDER_SVD_METHOD")
+fi
+if [ -n "$DIFF_SVD_METHOD" ]; then
+  HYDRA_OVERRIDES+=("calculator.diff_svd_method=$DIFF_SVD_METHOD")
+fi
+if [ -n "$HYPOTHESIS_TYPE" ]; then
+  HYDRA_OVERRIDES+=("reward_manager.hypothesis_type=$HYPOTHESIS_TYPE")
+fi
 ray job submit --address=${HEAD_IP}:${HEAD_PORT} \
   --entrypoint-num-cpus=1 \
-  --runtime-env-json='{
-        "working_dir": "'${WORKING_DIR}'",
-        "excludes": [
-          "/.git/",                    
-          "/checkpoint/",
-          "/custom/checkpoint/",
-          "/custom/log/",
-          "/custom/data/",
-          "/home/root1/Fanding/simpleRL-reason/examples/simplelr_math_eval/data/tabmwp/test.jsonl"
-        ],
-        "env_vars": {
-          "http_proxy": "",
-          "https_proxy": "",
-          "WANDB_API_KEY": "8c84ddd422687515e5df25109f349a4f2c5df884",
-          "CUDA_LAUNCH_BLOCKING": "1",
-          "NCCL_DEBUG": "INFO",
-          "NCCL_SOCKET_IFNAME": "enp2s0",
-          "RAY_OVERRIDE_JOB_RUNTIME_ENV": "1",
-          "REWORD_FUNCTION_TYPE": "independent",
-          "RAY_DEBUG": "legacy"
-        }
-    }' \
+  --runtime-env-json="${RAY_RUNTIME_ENV_JSON}" \
   -- python -m verl.trainer.main_ppo \
   algorithm.adv_estimator=grpo \
   data.train_files=$HDFS_DATA_PATH/$DATASET_NAME/train.parquet \
