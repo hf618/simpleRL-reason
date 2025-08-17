@@ -387,10 +387,13 @@ def compute_timing_metrics(batch, timing_raw):
     num_overall_tokens = num_prompt_tokens + num_response_tokens
 
     num_tokens_of_section = {
-        'gen': num_response_tokens,
-        **{
-            name: num_overall_tokens for name in ['ref', 'values', 'adv', 'update_critic', 'update_actor']
+    **{
+            # 将所有只处理响应的计时器名称都放在这里
+            name: num_response_tokens for name in ['gen', 'cal', 'cal_global']
         },
+    **{
+        name: num_overall_tokens for name in ['ref', 'values', 'adv', 'update_critic', 'update_actor']
+    },
     }
 
     return {
@@ -727,13 +730,17 @@ class RayPPOTrainer(object):
             self.config.actor_rollout_ref.actor.optim.total_training_steps = total_training_steps
             self.config.critic.optim.total_training_steps = total_training_steps
 
-    def _validate(self):
+    def _validate(self, timing_raw: Dict = None):
         correctness_lst = []
         reward_tensor_lst = []
         reward_tensor_0_lst = []
         data_source_lst = []
         calculater_lst = []
+        global_calculater_lst = []
+        cumulative_calculater_lst = []
 
+        if timing_raw is None:
+            timing_raw = {}
 
         use_calculator = self.config.calculator.get('enable', True)
 
@@ -771,20 +778,28 @@ class RayPPOTrainer(object):
             lens_tensor = response_attention_mask.sum(dim=-1)  # [10] - sum of non-padding tokens for each sample
 
              
-            # <<< INICIO DE MODIFICACIONES EN _validate >>>
-            # Obtener diff_stride desde la configuración de Hydra
-            if use_calculator and 'hidden_states_decode' in test_batch.batch:
-                diff_stride_val = self.config.calculator.get('diff_stride', 20)
-                
-                test_batch.batch['calculator_results'] = self.calculator(
-                    hidden_states=test_batch.batch['hidden_states_decode'],  # [10, 2048, 2, 896]
-                    attention_mask=response_attention_mask,  # [10, 2048]
-                    compute_diff=True, 
-                    diff_stride=diff_stride_val  # Usar el valor de la configuración
-                )
-                # <<< FIN DE MODIFICACIONES EN _validate >>>
+            with _timer('testing_cal', timing_raw):
+                if use_calculator and 'hidden_states_decode' in test_batch.batch:
 
-                calculater_lst.append(test_batch.batch['calculator_results'])
+                    diff_stride_val = self.config.calculator.get('diff_stride', 20)
+                    hidden_for_calc = test_batch.batch['hidden_states_decode'] # # [10, 2048, 2, 896]
+                    
+                    # --- 1. 原有的单样本指标计算 (不变) ---
+                    test_batch.batch['calculator_results'] = self.calculator(
+                        hidden_states=hidden_for_calc,
+                        attention_mask=response_attention_mask,
+                        compute_diff=True,
+                        diff_stride=diff_stride_val
+                    )
+                    calculater_lst.append(test_batch.batch['calculator_results'])
+
+                    with _timer('testing_cal_global', timing_raw):
+                        aggregated_metrics = self._compute_aggregated_metrics(hidden_for_calc, response_attention_mask)
+                        # 由于验证集通常是一个大batch，我们直接将其结果存入列表
+                
+
+                    
+
             
             # Add these near where other lists are initialized
             length_lst = []
@@ -894,7 +909,17 @@ class RayPPOTrainer(object):
         for data_source, correctnesses in data_source_correctness.items():
             metric_dict[f'val/test_correctness/{data_source}'] = np.mean(correctnesses)
 
-        # === 新增代码开始 ===
+        if aggregated_metrics:
+                # 为了和之前的逻辑兼容，我们将它放入一个临时的list中
+                # 注意：这里我们不再需要 global_calculater_lst 和 cumulative_calculater_lst
+                # 直接处理返回的结果即可
+                for ds_name in data_source_reward.keys():
+                    for layer, layer_metrics in aggregated_metrics.items():
+                        for metric_name, value in layer_metrics.items():
+                            key = f"val/{ds_name}/layer_{layer}/{metric_name}"
+                            metric_dict[key] = value
+                    break # 全局指标只需记录一次
+
         def fill_metrics(prefix, calc_dict):
             """通用指标填充函数"""
             for ds_name, ds_data in calc_dict.items():
@@ -906,15 +931,12 @@ class RayPPOTrainer(object):
                         else:
                             metric_dict[key] = 0.0
 
-        # <<< INICIO DE MODIFICACIONES EN _validate >>>
         if calculator_cat:
             fill_metrics("cal_correct", data_source_calculator_correct)
             fill_metrics("cal_incorrect", data_source_calculator_incorrect)
             fill_metrics("cal_overall", data_source_calculator_overall)
-        # <<< FIN DE MODIFICACIONES EN _validate >>>
 
 
-        # Add these with the other metric calculations
         for data_source, lengths in data_source_length.items():
             metric_dict[f'val/test_overall_len/{data_source}'] = np.mean(lengths)
             # Calculate correct/incorrect lengths by filtering with correctness
@@ -1135,6 +1157,70 @@ class RayPPOTrainer(object):
                                                     prefix=logging_prefix)
         metrics.update(global_balance_stats)
 
+    def _compute_aggregated_metrics(self, hidden_states: torch.Tensor, attention_mask: torch.Tensor) -> dict:
+        """
+        根据给定的隐状态计算、解析并返回0阶(全局)和高阶(累积)的聚合指标。
+        这是一个辅助函数，用于被 fit 和 _validate 方法调用，以避免代码重复。
+        """
+        if not (self.config.calculator.get('compute_global_metrics', False) or
+                self.config.calculator.get('compute_cumulative_global_metrics', False)):
+            return {}
+
+        # 1. 准备聚合矩阵
+        B, S, L, D = hidden_states.shape
+        device = hidden_states.device
+
+        # <<< 核心修正点 1：构造正确的输入形状 (1, B, L, D) >>>
+        # 将原始的批次大小B视为新的序列长度
+        aggregated_hidden = torch.zeros(1, B, L, D, device=device, dtype=hidden_states.dtype)
+        
+        # 循环填充这个 (1, B, L, D) 的张量
+        for i in range(B):
+            mask = attention_mask[i].bool()
+            valid_hidden = hidden_states[i, mask, :, :]
+            if valid_hidden.shape[0] > 0:
+                # mean_vector_per_layer 的形状是 (L, D)
+                mean_vector_per_layer = valid_hidden.mean(dim=0)
+                # <<< 核心修正点 2：在正确的位置填充 >>>
+                # 将其填充到批次0的第 i 个序列位置
+                aggregated_hidden[0, i, :, :] = mean_vector_per_layer
+
+        # <<< 核心修正点 3：创建匹配的注意力掩码，形状 (1, B) >>>
+        aggregated_mask = torch.ones(1, B, device=device, dtype=torch.long)
+
+        # 2. 决定是否需要计算高阶指标，然后只调用一次 calculator
+        should_compute_diff = self.config.calculator.get('compute_cumulative_global_metrics', False)
+        global_stride = self.config.calculator.get('global_diff_stride', 1)
+        
+        all_global_metrics = self.calculator(
+            aggregated_hidden,
+            aggregated_mask,
+            compute_diff=should_compute_diff,
+            diff_stride=global_stride
+        )
+
+        # 3. 解析结果并构建返回字典 (这部分逻辑不变，因为calculator正确处理后输出依然正确)
+        metrics_to_return = {}
+        for layer, metrics_dict in all_global_metrics.items():
+            metrics_to_return[layer] = {}
+            for metric_name, value in metrics_dict.items():
+                is_diff_metric = 'diff' in metric_name
+
+                # calculator返回的value张量形状现在是 (1,) 或 (B-strides,)
+                # 我们需要展平它以方便后续处理
+                value = value.flatten()
+
+                if is_diff_metric and should_compute_diff:
+                    new_name = f"cumulative/{metric_name}"
+                    metrics_to_return[layer][new_name] = value.mean().item()
+
+                elif not is_diff_metric and self.config.calculator.get('compute_global_metrics', False):
+                    new_name = f"global/{metric_name}"
+                    # 0阶指标现在返回的是(1,)的张量
+                    metrics_to_return[layer][new_name] = value.item()
+        
+        return metrics_to_return
+
     def fit(self):
         """
         The training loop of PPO.
@@ -1257,16 +1343,30 @@ class RayPPOTrainer(object):
                     # 判断是否用 hidden_states_decode 计算 metrics
                     with _timer('cal', timing_raw):
                         if use_calculator and 'hidden_states_decode' in batch.batch:
-
-                            prompt_len = batch.batch['prompts'].shape[1] # 例如 512
+                            
+                            # 0. 为了高效，先将需要的数据暂存
+                            hidden_for_calc = batch.batch['hidden_states_decode']
+                            prompt_len = batch.batch['prompts'].shape[1]
                             response_attention_mask = batch.batch['attention_mask'][:, prompt_len:]
                             diff_stride_train = self.config.calculator.get('diff_stride', 20)
 
-                            batch.batch['calculator_results'] = self.calculator(hidden_states=batch.batch['hidden_states_decode'], 
-                                                                                attention_mask=response_attention_mask,
-                                                                                compute_diff=True, 
-                                                                                diff_stride=diff_stride_train
-                                                                                )
+
+                            # 1. 执行原有的“单样本”指标计算，结果存入 batch 供后续处理
+                            batch.batch['calculator_results'] = self.calculator(
+                                hidden_states=hidden_for_calc,
+                                attention_mask=response_attention_mask,
+                                compute_diff=True,
+                                diff_stride=diff_stride_train
+                            )
+
+                            with _timer('cal_global', timing_raw):
+                                aggregated_metrics = self._compute_aggregated_metrics(hidden_for_calc, response_attention_mask)
+                        
+                                # 将返回的指标添加 'train/' 前缀并更新到主 metrics 字典
+                                for layer, layer_metrics in aggregated_metrics.items():
+                                    for name, value in layer_metrics.items():
+                                        log_key = f"train/layer_{layer}/{name}"
+                                        metrics[log_key] = value
 
                             del batch.batch['hidden_states_decode']
 
@@ -1386,7 +1486,7 @@ class RayPPOTrainer(object):
                     if self.val_reward_fn is not None and self.config.trainer.test_freq > 0 and \
                         self.global_steps % self.config.trainer.test_freq == 0:
                         with _timer('testing', timing_raw):
-                            val_metrics: dict = self._validate()
+                            val_metrics: dict = self._validate(timing_raw)
                         metrics.update(val_metrics)
 
                     if self.config.trainer.save_freq > 0 and \
@@ -1409,7 +1509,7 @@ class RayPPOTrainer(object):
 
                     # perform validation after training
                     if self.val_reward_fn is not None:
-                        val_metrics = self._validate()
+                        val_metrics = self._validate(timing_raw)
                         pprint(f'Final validation metrics: {val_metrics}')
                         logger.log(data=val_metrics, step=self.global_steps)
                     return

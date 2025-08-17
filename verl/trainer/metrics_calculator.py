@@ -20,6 +20,8 @@ class RepresentationMetricsCalculator():
                  svd_rank: int = 6,
                  svd_niter: int = 5,
                  compute_log_effective_rank: bool = False,
+                 compute_global_metrics: bool = False,
+                 compute_cumulative_global_metrics: bool = False
                  ):
         """
         Initializes the RepresentationMetricsCalculator.
@@ -38,6 +40,8 @@ class RepresentationMetricsCalculator():
         self.output_token_level_metrics = output_token_level_metrics
         self.epsilon = 1e-8
         self.compute_log_effective_rank = compute_log_effective_rank # New flag for log effective rank
+        self.compute_global_metrics = compute_global_metrics
+        self.compute_cumulative_global_metrics = compute_cumulative_global_metrics
         
         # 保存SVD配置
         self._cached_tensors = {}
@@ -119,7 +123,7 @@ class RepresentationMetricsCalculator():
         a sequence-level value to the token-level.
         """
         batch_size, seq_len = attention_mask.shape
-        final_token_tensor = torch.zeros_like(attention_mask, dtype=torch.float32)
+        final_token_tensor = torch.zeros_like(attention_mask, dtype=torch.bfloat16)
 
         for i in range(batch_size):
             target_sum_s = seq_level_tensor[i].item()
@@ -166,6 +170,56 @@ class RepresentationMetricsCalculator():
         token_level_tensor = per_token_value.unsqueeze(1).expand_as(attention_mask)
         token_level_tensor = token_level_tensor * attention_mask.float()
         return token_level_tensor
+    
+    def calculate_aggregated_metrics(self, hidden_states: torch.Tensor, attention_mask: torch.Tensor) -> dict:
+        """
+        Computes metrics on a globally aggregated matrix of mean hidden states.
+
+        Args:
+            hidden_states (torch.Tensor): The full hidden states tensor for the batch 
+                                          (batch_size, seq_len, num_layers, hidden_dim).
+            attention_mask (torch.Tensor): The attention mask for the response part 
+                                           (batch_size, seq_len).
+
+        Returns:
+            dict: A dictionary containing the computed global metrics for each layer.
+                  e.g., {"1": {"global/Effective Rank": 15.7, ...}, "2": {...}}
+        """
+        with torch.inference_mode():
+            batch_size, seq_len, num_layers, hidden_dim = hidden_states.shape
+            device = hidden_states.device
+            global_results = {}
+
+            print("Computing global aggregated metrics...")
+
+            for layer_idx in range(num_layers):
+                layer_key = str(layer_idx + 1)
+                layer_hidden = hidden_states[:, :, layer_idx, :].contiguous()
+                
+                # 高效创建聚合矩阵以节省显存
+                # 1. 预先分配最终大小的张量
+                aggregated_matrix = torch.zeros(batch_size, hidden_dim, device=device, dtype=layer_hidden.dtype)
+
+                # 2. 循环填充，避免创建大型中间列表
+                for i in range(batch_size):
+                    mask = attention_mask[i].bool()
+                    valid_hidden = layer_hidden[i, mask, :]
+                    if valid_hidden.shape[0] > 0:
+                        aggregated_matrix[i] = valid_hidden.mean(dim=0)
+                
+                # 3. 在这个聚合后的 (样本数 * 隐藏维度) 矩阵上计算指标
+                #    我们复用已有的单样本计算逻辑，将整个聚合矩阵视为一个“大样本”
+                layer_global_metrics = {}
+                for name, func in self.selected_metrics:
+                    # 注意：此时传递的 attention_mask 应该为 None 或一个全1的mask
+                    # 因为 aggregated_matrix 的第一维是样本数，不再是序列长度
+                    # 我们直接在整个矩阵上计算
+                    metric_value = func(aggregated_matrix.unsqueeze(0), None) #unsqueeze(0) to make it (1, num_samples, hidden_dim)
+                    layer_global_metrics[f"global/{name}"] = metric_value.item()
+
+                global_results[layer_key] = layer_global_metrics
+            
+            return global_results
  
     def calculate_metric_diff(self, hidden_states, attention_mask, stride):
         batch_size, _, _ = hidden_states.shape
@@ -435,7 +489,7 @@ class RepresentationMetricsCalculator_parallel():
         a sequence-level value to the token-level.
         """
         batch_size, seq_len = attention_mask.shape
-        final_token_tensor = torch.zeros_like(attention_mask, dtype=torch.float32)
+        final_token_tensor = torch.zeros_like(attention_mask, dtype=torch.bfloat16)
 
         for i in range(batch_size):
             target_sum_s = seq_level_tensor[i].item()

@@ -306,7 +306,7 @@ class MixtralModel(nn.Module):
                 "residual": residual
             })
         hidden_states, _ = self.norm(hidden_states, residual)
-        self.all_hidden_states.append(hidden_states.detach().clone().to(torch.float32))  # 保存最终 norm 输出
+        self.all_hidden_states.append(hidden_states.detach().clone().to(torch.bfloat16))  # 保存最终 norm 输出
         return hidden_states
 
 

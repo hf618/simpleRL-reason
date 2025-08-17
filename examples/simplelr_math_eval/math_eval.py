@@ -391,7 +391,7 @@ def main(llm, tokenizer, data_name, args):
                 for output in outputs:
                     # 路径取决于您的 vLLM 版本，这里是一个假设的路径
                     if output.hidden_states[0] is not None:
-                        hidden_states_list.append(output.hidden_states[0].to(torch.float32))  # 确保转换为 float16
+                        hidden_states_list.append(output.hidden_states[0].to(torch.bfloat16))  # 确保转换为 float16
                     else:
                         print("Warning: `hidden_states` not found in vLLM output. Metrics calculation will be skipped.")
                         args.calculate_metrics = False

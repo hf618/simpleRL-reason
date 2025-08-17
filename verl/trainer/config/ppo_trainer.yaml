@@ -203,7 +203,8 @@ reward_manager:
   aux_reward_global_weight: 1.0
   token_level_baseline_type: 'internal_mean' # 可选值: 'internal_mean' (新思路) 或 'external_ema' (老办法)
   aux_fix: False
-  hypothesis_type: "planA"
+  hypothesis_type: "planB"
+  
 
 calculator:
   diff_stride: 20
@@ -215,4 +216,7 @@ calculator:
   svd_niter: 5
   zeroth_order_svd_method: 'full' 
   diff_svd_method: 'full'
+  compute_global_metrics: False
+  compute_cumulative_global_metrics: False
+  global_diff_stride: 1
   

@@ -97,12 +97,12 @@ def _calculate_reward_for_single_sample(
         
         w_explore = torch.tensor(weights_explore, device=data_item.batch.device)
         w_exploit = torch.tensor(weights_exploit, device=data_item.batch.device)
-        exploit_tendency = torch.sigmoid(modulation_gain * percentage_deviation)
-        dynamic_weights = (1.0 - exploit_tendency) * w_explore + exploit_tendency * w_exploit
+        diff_2_tendency = torch.sigmoid(modulation_gain * percentage_deviation)
+        dynamic_weights = (1.0 - diff_2_tendency) * w_explore + diff_2_tendency * w_exploit
         weights_map = {name: weight for name, weight in zip(indicator_names, dynamic_weights)}
         
         internal_metrics_sample['percentage_deviation'] = percentage_deviation.item()
-        internal_metrics_sample['exploit_tendency'] = exploit_tendency.item()
+        internal_metrics_sample['diff_2_tendency'] = diff_2_tendency.item()
         for name, weight in weights_map.items():
             internal_metrics_sample[f"weight_{name.replace(' ', '_').lower()}"] = weight.item()
 
@@ -295,7 +295,7 @@ class RewardManager():
         # ### 新增: 初始化用于存储内部指标的字典 ###
         internal_metrics = {
             'percentage_deviation': [],
-            'exploit_tendency': [],
+            'diff_2_tendency': [],
             'performance_scaling_factor': []
             # 其他指标将在循环中动态添加
         }
@@ -399,16 +399,16 @@ class RewardManager():
 
                 if self.hypothesis_type == "PlanA":
                     # 假说A：高 diff 2 -> 利用 (w_exploit)
-                    exploit_tendency = torch.sigmoid(self.modulation_gain * percentage_deviation)
-                    dynamic_weights = (1.0 - exploit_tendency) * w_explore + exploit_tendency * w_exploit
-                    # 记录 exploit_tendency
-                    internal_metrics['exploit_tendency'].append(exploit_tendency.item())
+                    diff_2_tendency = torch.sigmoid(self.modulation_gain * percentage_deviation)
+                    dynamic_weights = (1.0 - diff_2_tendency) * w_explore + diff_2_tendency * w_exploit
+                    # 记录 diff_2_tendency
+                    internal_metrics['diff_2_tendency'].append(diff_2_tendency.item())
                 elif self.hypothesis_type == "PlanB":
                     # 假说B：高 diff 2 -> 探索 (w_explore) close to the RUC
-                    explore_tendency = torch.sigmoid(self.modulation_gain * percentage_deviation)
-                    dynamic_weights = explore_tendency * w_explore + (1.0 - explore_tendency) * w_exploit
+                    diff_2_tendency  = torch.sigmoid(self.modulation_gain * percentage_deviation)
+                    dynamic_weights = diff_2_tendency  * w_explore + (1.0 - diff_2_tendency) * w_exploit
                     # 记录 explore_tendency
-                    internal_metrics['explore_tendency'].append(explore_tendency.item())
+                    internal_metrics['diff_2_tendency'].append(diff_2_tendency.item())
                 else:
                     raise ValueError(f"Invalid hypothesis_type: {self.hypothesis_type}. Must be 'PlanA' or 'PlanB'.")
 
@@ -418,7 +418,7 @@ class RewardManager():
 
                 # ### 新增: 记录 batch 的平均值 ###
                 internal_metrics['percentage_deviation'].append(percentage_deviation.item())
-                internal_metrics['exploit_tendency'].append(exploit_tendency.item())
+                internal_metrics['diff_2_tendency'].append(diff_2_tendency.item())
                 # ### 新增: 记录动态权重 ###
                 for name, weight in weights_map.items():
                     log_name = f"weight_{name.replace(' ', '_').lower()}"
@@ -572,7 +572,7 @@ class RewardManager_parallel():
         reward_tensor = torch.zeros_like(data.batch['responses'], dtype=torch.bfloat16)
         correctness_tensor = torch.zeros(len(data), dtype=torch.bfloat16)
         
-        internal_metrics = { 'percentage_deviation': [], 'exploit_tendency': [] }
+        internal_metrics = { 'percentage_deviation': [], 'diff_2_tendency': [] }
         already_print_data_sources = {}
 
         use_aux_reward = self.add_reward and self.calculator_enabled and metrics_old

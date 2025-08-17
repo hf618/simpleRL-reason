@@ -23,7 +23,7 @@
 # limitations under the License.
 """Inference-only Qwen2 model compatible with HuggingFace weights."""
 from typing import Iterable, List, Optional, Tuple
-############changed!!!!!!####################
+
 import torch
 from torch import nn
 from transformers import Qwen2Config
@@ -46,7 +46,7 @@ from vllm.model_executor.layers.vocab_parallel_embedding import (
 from vllm.model_executor.model_loader.weight_utils import (
     default_weight_loader, maybe_remap_kv_scale_name)
 from vllm.model_executor.sampling_metadata import SamplingMetadata
-from hidden_vllm.sequence import IntermediateTensors, SamplerOutput
+from vllm.sequence import IntermediateTensors, SamplerOutput
 
 from .interfaces import SupportsLoRA
 from .utils import is_pp_missing_parameter, make_layers
@@ -278,8 +278,7 @@ class Qwen2Model(nn.Module):
             residual = intermediate_tensors["residual"]
         for i in range(self.start_layer, self.end_layer):
             layer = self.layers[i]
-            
-            hidden_states, residual = layer( # 1362 * 896
+            hidden_states, residual = layer(
                 positions,
                 hidden_states,
                 kv_caches[i - self.start_layer],
@@ -287,17 +286,14 @@ class Qwen2Model(nn.Module):
                 residual,
             )
             # if i == 18:
-            #     self.all_hidden_states.append(hidden_states.detach().clone().to( torch.bfloat16))  # 保存每一层输出
+            #     self.all_hidden_states.append(hidden_states.detach().clone().to(torch.float16))  # 保存每一层输出
         if not get_pp_group().is_last_rank:
             return IntermediateTensors({
                 "hidden_states": hidden_states,
                 "residual": residual
             })
-        
-        
-        
-        hidden_states, _ = self.norm(hidden_states, residual)
         self.all_hidden_states.append(hidden_states.detach().clone().to(torch.bfloat16))  # 保存最终 norm 输出
+        hidden_states, _ = self.norm(hidden_states, residual)
         return hidden_states
 
 
@@ -371,7 +367,7 @@ class Qwen2ForCausalLM(nn.Module, SupportsLoRA):
     ) -> torch.Tensor:
 
         # self.all_hidden_states = []  # 每次 forward 前清空
-        ##breakpoint(()
+
         hidden_states = self.model(input_ids, positions, kv_caches,
                                    attn_metadata, intermediate_tensors)
         

@@ -283,7 +283,7 @@ class Sequence:
         # Input + output tokens
         self.tokens: Optional[List[str]] = None
         # 魔改
-        self.hidden_states = torch.empty(0, device='cpu', dtype=torch.float32)  # 初始化为空张量
+        self.hidden_states = torch.empty(0, device='cpu', dtype=torch.bfloat16)  # 初始化为空张量
    
 
     @property
