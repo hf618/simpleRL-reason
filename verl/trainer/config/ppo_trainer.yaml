@@ -218,5 +218,6 @@ calculator:
   diff_svd_method: 'full'
   compute_global_metrics: False
   compute_cumulative_global_metrics: False
-  global_diff_stride: 1
+  global_diff_stride_train: 1 
+  global_diff_stride_val: 20  
   

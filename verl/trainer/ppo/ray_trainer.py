@@ -794,8 +794,8 @@ class RayPPOTrainer(object):
                     calculater_lst.append(test_batch.batch['calculator_results'])
 
                     with _timer('testing_cal_global', timing_raw):
-                        aggregated_metrics = self._compute_aggregated_metrics(hidden_for_calc, response_attention_mask)
-                        # 由于验证集通常是一个大batch，我们直接将其结果存入列表
+                        val_stride = self.config.calculator.get('global_diff_stride_val', 20)
+                        aggregated_metrics = self._compute_aggregated_metrics(hidden_for_calc, response_attention_mask, stride=val_stride)
                 
 
                     
@@ -1157,11 +1157,12 @@ class RayPPOTrainer(object):
                                                     prefix=logging_prefix)
         metrics.update(global_balance_stats)
 
-    def _compute_aggregated_metrics(self, hidden_states: torch.Tensor, attention_mask: torch.Tensor) -> dict:
+    def _compute_aggregated_metrics(self, hidden_states: torch.Tensor, attention_mask: torch.Tensor, stride: int) -> dict:
         """
         根据给定的隐状态计算、解析并返回0阶(全局)和高阶(累积)的聚合指标。
         这是一个辅助函数，用于被 fit 和 _validate 方法调用，以避免代码重复。
         """
+        global_stride = stride 
         if not (self.config.calculator.get('compute_global_metrics', False) or
                 self.config.calculator.get('compute_cumulative_global_metrics', False)):
             return {}
@@ -1190,7 +1191,6 @@ class RayPPOTrainer(object):
 
         # 2. 决定是否需要计算高阶指标，然后只调用一次 calculator
         should_compute_diff = self.config.calculator.get('compute_cumulative_global_metrics', False)
-        global_stride = self.config.calculator.get('global_diff_stride', 1)
         
         all_global_metrics = self.calculator(
             aggregated_hidden,
@@ -1360,7 +1360,9 @@ class RayPPOTrainer(object):
                             )
 
                             with _timer('cal_global', timing_raw):
-                                aggregated_metrics = self._compute_aggregated_metrics(hidden_for_calc, response_attention_mask)
+                                train_stride = self.config.calculator.get('global_diff_stride_train', 1)
+                                aggregated_metrics = self._compute_aggregated_metrics(hidden_for_calc, response_attention_mask, stride=train_stride)
+
                         
                                 # 将返回的指标添加 'train/' 前缀并更新到主 metrics 字典
                                 for layer, layer_metrics in aggregated_metrics.items():
@@ -1368,7 +1370,7 @@ class RayPPOTrainer(object):
                                         log_key = f"train/layer_{layer}/{name}"
                                         metrics[log_key] = value
 
-                            del batch.batch['hidden_states_decode']
+                            del batch.batch['hidden_states_decode'], hidden_for_calc
 
                     
                     if self.config.trainer.remove_clip:

@@ -91,7 +91,8 @@ HYPOTHESIS_TYPE="PlanA"
 
 COMPUTE_GLOBAL_METRICS=False
 COMPUTE_CUMULATIVE_GLOBAL_METRICS=False
-GLOBAL_DIFF_STRIDE=1
+GLOBAL_DIFF_STRIDE_TRAIN=${GLOBAL_DIFF_STRIDE_TRAIN:-1}
+GLOBAL_DIFF_STRIDE_VAL=${GLOBAL_DIFF_STRIDE_VAL:-20}
 generate_suffix() {
   local suffix=""
   local dataset_provided=false
@@ -214,7 +215,8 @@ while [[ "$#" -gt 0 ]]; do
     --hypothesis_type) HYPOTHESIS_TYPE="$2"; shift 2 ;;
     --compute_global_metrics) COMPUTE_GLOBAL_METRICS="$2"; shift 2 ;;
     --compute_cumulative_global_metrics) COMPUTE_CUMULATIVE_GLOBAL_METRICS="$2"; shift 2 ;;
-    --global_diff_stride) GLOBAL_DIFF_STRIDE="$2"; shift 2 ;;
+    --global_diff_stride_train) GLOBAL_DIFF_STRIDE_TRAIN="$2"; shift 2 ;;
+    --global_diff_stride_val) GLOBAL_DIFF_STRIDE_VAL="$2"; shift 2 ;;
     *)
       echo "Unknown option: $1"
       exit 1
@@ -391,8 +393,11 @@ fi
 if [ -n "$COMPUTE_CUMULATIVE_GLOBAL_METRICS" ]; then
   HYDRA_OVERRIDES+=("calculator.compute_cumulative_global_metrics=$COMPUTE_CUMULATIVE_GLOBAL_METRICS")
 fi
-if [ -n "$GLOBAL_DIFF_STRIDE" ]; then 
-  HYDRA_OVERRIDES+=("calculator.global_diff_stride=$GLOBAL_DIFF_STRIDE")
+if [ -n "$GLOBAL_DIFF_STRIDE_TRAIN" ]; then 
+  HYDRA_OVERRIDES+=("calculator.global_diff_stride_train=$GLOBAL_DIFF_STRIDE_TRAIN")
+fi
+if [ -n "$GLOBAL_DIFF_STRIDE_VAL" ]; then 
+  HYDRA_OVERRIDES+=("calculator.global_diff_stride_val=$GLOBAL_DIFF_STRIDE_VAL")
 fi
 ray job submit --address=${HEAD_IP}:${HEAD_PORT} \
   --entrypoint-num-cpus=1 \
