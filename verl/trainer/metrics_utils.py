@@ -45,7 +45,8 @@ def compute_single_effective_rank(hidden: torch.Tensor, svd_rank: int, svd_niter
         if method == 'lowrank':
             _, S, _ = torch.svd_lowrank(centered, q=min(svd_rank, min(centered.shape)), niter=svd_niter) # 添加 niter 参数
         else: # 'full'
-            _, S, _ = torch.linalg.svd(centered, full_matrices=False)
+            # _, S, _ = torch.linalg.svd(centered, full_matrices=False)
+            S = torch.linalg.svdvals(centered) # only S
             
         normalized_S = S / (S.sum() + 1e-8)
         if log_output:

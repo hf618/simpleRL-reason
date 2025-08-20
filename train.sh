@@ -78,20 +78,21 @@ export RAY_RUNTIME_ENV_JSON="{
 # 5. If use PPO: critic_model_path give absolute path, set rollout_n as 1 and adv_estimator "gae"
 bash train_grpo_math_tune_ray.sh \
     --model_name llama/Llama-3.2-1B-Instruct --max_response_length 1024 \
-    --critic_model_path "" --adv_estimator "grpo" \
-    --train_batch_size 48 --ppo_mini_batch_size 24 --val_batch_size 48  --rollout_n 4 \
+    --critic_model_path "/media/root1/4t/Models/deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B" --adv_estimator "gae" \
+    --dataset_name "simplelr_abel_gsm8k_level1" \
+    --exp_name "PPOer_adv" --add_reward True --add_adv True \
+    --train_batch_size 48 --ppo_mini_batch_size 24 --val_batch_size 48  --rollout_n 1 \
+    --compute_global_metrics True --compute_cumulative_global_metrics True --global_diff_stride_train 5 --global_diff_stride_val 20 \
     --ppo_micro_batch_size 1 --log_prob_micro_batch_size 1 --micro_rollout_batch_size 1 \
     --kl_loss_coef 0.001 --entropy_coeffient 0.001 --rollout_gpu_memory_util 0.70 \
 	  --logger_config "['console','wandb']" \
-    --rollout_tp 1 --save_freq 20 --test_freq 10 --total_epochs 2 \
-    --exp_name "er_adv_allfull" --add_reward True --add_adv True --hypothesis_type "PlanB" \
-    --dataset_name "simplelr_abel_gsm8k_level1" \
+    --rollout_tp 2 --save_freq 20 --test_freq 10 --total_epochs 2 \
+    --hypothesis_type "PlanB" \
     --val_before_train True --val_sample_size -1 --enable_calculator True --metric_indices "[1]" \
-    --compute_global_metrics True --compute_cumulative_global_metrics True --global_diff_stride_train 20 --global_diff_stride_val 20 \
     --reward_weights "[0.0, 0.0, 1.0]" --reward_weights_exploit "[0.0, 1.0, 0.0]" \
     --reward_indicator_names "['Effective Rank diff 2', 'Effective Rank diff', 'Effective Rank']" \
     --output_token_level_metrics False --compute_log_effective_rank False \
     --zeroth_order_svd_method 'full' --diff_svd_method 'full' --svd_rank 256 --svd_niter 5 \
-    --diff_stride 40 --modulation_gain 1.0 --aux_reward_global_weight 0.8 --aux_fix True --reward_ema_alpha 0.3 --adv_shaping_kappa 2.0 \
-    --return_hidden_states True --return_prefill False --return_decode True
+    --diff_stride 40 --modulation_gain 1.5 --aux_reward_global_weight 0.15 --aux_fix True --reward_ema_alpha 0.3 --adv_shaping_kappa 2.0 \
+    --return_hidden_states True --return_prefill False --return_decode True \
 
