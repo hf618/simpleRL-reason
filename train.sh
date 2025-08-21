@@ -86,13 +86,13 @@ bash train_grpo_math_tune_ray.sh \
     --ppo_micro_batch_size 1 --log_prob_micro_batch_size 1 --micro_rollout_batch_size 1 \
     --kl_loss_coef 0.001 --entropy_coeffient 0.001 --rollout_gpu_memory_util 0.70 \
 	  --logger_config "['console','wandb']" \
-    --rollout_tp 2 --save_freq 20 --test_freq 10 --total_epochs 2 \
+    --rollout_tp 1 --save_freq 40 --test_freq 10 --total_epochs 2 \
     --hypothesis_type "PlanB" \
     --val_before_train True --val_sample_size -1 --enable_calculator True --metric_indices "[1]" \
     --reward_weights "[0.0, 0.0, 1.0]" --reward_weights_exploit "[0.0, 1.0, 0.0]" \
     --reward_indicator_names "['Effective Rank diff 2', 'Effective Rank diff', 'Effective Rank']" \
     --output_token_level_metrics False --compute_log_effective_rank False \
     --zeroth_order_svd_method 'full' --diff_svd_method 'full' --svd_rank 256 --svd_niter 5 \
-    --diff_stride 40 --modulation_gain 1.5 --aux_reward_global_weight 0.15 --aux_fix True --reward_ema_alpha 0.3 --adv_shaping_kappa 2.0 \
+    --diff_stride 40 --modulation_gain 1.5 --aux_reward_global_weight 0.10 --aux_fix True --reward_ema_alpha 0.3 --adv_shaping_kappa 2.0 \
     --return_hidden_states True --return_prefill False --return_decode True \
 

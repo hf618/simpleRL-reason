@@ -399,6 +399,9 @@ fi
 if [ -n "$GLOBAL_DIFF_STRIDE_VAL" ]; then 
   HYDRA_OVERRIDES+=("calculator.global_diff_stride_val=$GLOBAL_DIFF_STRIDE_VAL")
 fi
+if [ -n "$AUX_REWARD_GLOBAL_WEIGHT" ]; then
+  HYDRA_OVERRIDES+=("reward_manager.aux_reward_global_weight=$AUX_REWARD_GLOBAL_WEIGHT")
+fi
 ray job submit --address=${HEAD_IP}:${HEAD_PORT} \
   --entrypoint-num-cpus=1 \
   --runtime-env-json="${RAY_RUNTIME_ENV_JSON}" \
