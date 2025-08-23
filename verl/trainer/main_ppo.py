@@ -38,10 +38,28 @@ import torch.nn.functional as F
 import ray
 import hydra
 
+import numpy as np
+import random
+def set_global_seed(seed):
+    """设置所有相关的随机数种子以确保可复现性"""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    print(f"全局随机数种子已设置为: {seed}")
+    # (可选) 为了完全的确定性，可以加上下面两行，但这可能会降低性能
+    # torch.backends.cudnn.deterministic = True
+    # torch.backends.cudnn.benchmark = False
+
 # This tells Hydra to use this function as the entry point and 
 # to load the configuration from the config/ppo_trainer.yaml file (or a similar file).
 @hydra.main(config_path='config', config_name='ppo_trainer', version_base=None)
 def main(config):
+    # 在 main 函数的最开始，读取配置中的种子并调用设置函数
+    # 我们从 config.data.seed 读取，如果不存在，就用一个默认值比如 42
+    seed = config.data.get('seed', 1)
+    set_global_seed(seed)
     run_ppo(config, compute_score=_custom_compute_score)
 
 
