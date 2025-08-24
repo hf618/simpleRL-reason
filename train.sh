@@ -77,16 +77,16 @@ export RAY_RUNTIME_ENV_JSON="{
 # 4. All effective rank and entropy calculation via centered matrix
 # 5. If use PPO: critic_model_path give absolute path, set rollout_n as 1 and adv_estimator "gae"
 bash train_grpo_math_tune_ray.sh \
-    --model_name llama/Llama-3.2-1B-Instruct --max_response_length 1024 \
+    --model_name qwen/Qwen2.5-1.5B --max_prompt_length 512 --max_response_length 1024 \
     --critic_model_path "/media/root1/4t/Models/deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B" --adv_estimator "gae" \
-    --exp_name "PPOer_adv" --add_reward True --add_adv True \
+    --exp_name "test" --add_reward False --add_adv False \
     --train_batch_size 48 --ppo_mini_batch_size 24 --val_batch_size 48  --rollout_n 1 \
     --ppo_micro_batch_size 1 --log_prob_micro_batch_size 1 --micro_rollout_batch_size 1 \
-    --compute_global_metrics True --compute_cumulative_global_metrics True --global_diff_stride_train 5 --global_diff_stride_val 20 \
+    --compute_global_metrics True --compute_cumulative_global_metrics True --global_diff_stride_train 5 --global_diff_stride_val 5 \
     --kl_loss_coef 0.001 --entropy_coeffient 0.001 --rollout_gpu_memory_util 0.70 --logger_config "['console','wandb']" \
-    --rollout_tp 1 --save_freq 40 --test_freq 10 --total_epochs 2 \
-    --hypothesis_type "PlanB" --dataset_name "simplelr_abel_gsm8k_level1" \
-    --val_before_train True --val_sample_size -1 --enable_calculator True --metric_indices "[1]" \
+    --rollout_tp 1 --save_freq 40 --except_save "" --test_freq 10 --total_epochs 2 \
+    --hypothesis_type "PlanB" --dataset_name "simplelr_abel_level3to5" \
+    --val_before_train True --val_sample_size 48 --enable_calculator True --metric_indices "[1]" \
     --reward_weights "[0.0, 0.0, 1.0]" --reward_weights_exploit "[0.0, 1.0, 0.0]" \
     --reward_indicator_names "['Effective Rank diff 2', 'Effective Rank diff', 'Effective Rank']" \
     --output_token_level_metrics False --compute_log_effective_rank False \

@@ -54,6 +54,7 @@ class RepresentationMetricsCalculator():
         all_base_metrics = [
             ("Response Entropy 1", self.calculate_response_entropy),
             ("Effective Rank", lambda hs, mask: self.calculate_effective_rank(hs, mask, log_output=False)),
+            ("Traditional Rank", self.calculate_traditional_rank),
             ("Curvature", self.calculate_curvature)
         ]
 
@@ -299,32 +300,43 @@ class RepresentationMetricsCalculator():
             entropies[i] = metrics_utils.compute_single_entropy(valid_hidden, alpha, matrix_type)
         return entropies
     
-    def calculate_effective_rank(self, hidden_states: torch.Tensor, attention_mask: torch.Tensor, log_output: bool = False) -> torch.Tensor:
-        """
-        Calculates effective rank for each sample in a batch by calling the single-sample helper.
+    def _calculate_and_cache_ranks(self, hidden_states: torch.Tensor, attention_mask: torch.Tensor, log_output: bool):
+        """内部函数，用于计算并缓存有效秩和传统秩，确保SVD只运行一次。"""
+        # 使用一个唯一的键来缓存结果
+        cache_key = (id(hidden_states), log_output)
+        if cache_key in self._cached_tensors:
+            return self._cached_tensors[cache_key]
 
-        Args:
-            hidden_states (torch.Tensor): Hidden states for a single layer (batch_size, seq_len, hidden_dim).
-            attention_mask (torch.Tensor): Attention mask (batch_size, seq_len).
-            log_output (bool): If True, returns the natural logarithm of the effective rank.
-                               Defaults to False.
+        batch_size = hidden_states.shape[0]
+        device = hidden_states.device
+        effective_ranks = torch.zeros(batch_size, device=device)
+        traditional_ranks = torch.zeros(batch_size, device=device, dtype=torch.int32)
 
-        Returns:
-            torch.Tensor: A tensor of effective ranks (or their logs) for each sample in the batch.
-        """
-        batch_size, seq_len, hidden_dim = hidden_states.shape
-        ranks = torch.zeros(batch_size, device=hidden_states.device)
-        
         for i in range(batch_size):
-            # 提取有效的、非填充的token
             mask = attention_mask[i].bool()
-            valid_hidden = hidden_states[i, mask, :]  # [valid_seq_len, hidden_dim]
+            valid_hidden = hidden_states[i, mask, :]
             
-            # 为每个样本调用单一计算函
-            ranks[i] = metrics_utils.compute_single_effective_rank(
-        valid_hidden, self.svd_rank, self.svd_niter, log_output, self.zeroth_order_svd_method # 传递新参数
-                )
-        return ranks
+            # 调用我们修改后的底层函数
+            eff_rank, trad_rank = metrics_utils.compute_single_effective_rank(
+                valid_hidden, self.svd_rank, self.svd_niter, log_output, self.zeroth_order_svd_method
+            )
+            effective_ranks[i] = eff_rank
+            traditional_ranks[i] = trad_rank
+        
+        # 将两个结果都存入缓存
+        self._cached_tensors[cache_key] = (effective_ranks, traditional_ranks)
+        return effective_ranks, traditional_ranks
+    
+    def calculate_effective_rank(self, hidden_states: torch.Tensor, attention_mask: torch.Tensor, log_output: bool = False) -> torch.Tensor:
+        """计算有效秩，现在通过缓存函数获取结果。"""
+        effective_ranks, _ = self._calculate_and_cache_ranks(hidden_states, attention_mask, log_output)
+        return effective_ranks
+    
+    def calculate_traditional_rank(self, hidden_states: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
+        """计算传统秩，也通过缓存函数获取结果。"""
+        # log_output 对传统秩没有影响，可以设为False
+        _, traditional_ranks = self._calculate_and_cache_ranks(hidden_states, attention_mask, log_output=False)
+        return traditional_ranks
       
     def calculate_curvature(self, hidden_states: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
         """

@@ -192,6 +192,7 @@ trainer:
   remove_previous_ckpt: True
   val_before_train: True   # Controla si se ejecuta la validación antes del entrenamiento
   val_sample_size: -1      # Número de muestras a usar para la validación. -1 para usar el dataset completo.
+  except_save: ""
 
 reward_manager:
   ema_alpha: 0.7

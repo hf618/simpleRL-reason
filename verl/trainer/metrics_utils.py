@@ -33,28 +33,47 @@ def compute_single_entropy(hidden: torch.Tensor, alpha: float = 1.0001, matrix_t
     except torch._C._LinAlgError:
         return 0.0
 
-def compute_single_effective_rank(hidden: torch.Tensor, svd_rank: int, svd_niter: int, log_output: bool = False, method: str = 'lowrank') -> float:
-    """计算单个样本的有效秩，支持 'lowrank' 和 'full' 两种SVD方法"""
+def compute_single_effective_rank(hidden: torch.Tensor, svd_rank: int, svd_niter: int, log_output: bool = False, method: str = 'lowrank') -> tuple[float, int]:
+    """
+    计算单个样本的有效秩和传统秩。
+    高效地只执行一次SVD计算。
+    返回: (effective_rank, traditional_rank)
+    """
     assert method in ['lowrank', 'full'], "SVD method must be 'lowrank' or 'full'"
-    if hidden.size(0) < 2: return 0.0
+    if hidden.size(0) < 2: return 0.0, 0
     
     try:
         centered = hidden - hidden.mean(dim=0, keepdim=True)
         centered = centered.to(torch.float32)
         S = None
         if method == 'lowrank':
-            _, S, _ = torch.svd_lowrank(centered, q=min(svd_rank, min(centered.shape)), niter=svd_niter) # 添加 niter 参数
+            _, S, _ = torch.svd_lowrank(centered, q=min(svd_rank, min(centered.shape)), niter=svd_niter)
         else: # 'full'
-            # _, S, _ = torch.linalg.svd(centered, full_matrices=False)
-            S = torch.linalg.svdvals(centered) # only S
+            S = torch.linalg.svdvals(centered)
             
-        normalized_S = S / (S.sum() + 1e-8)
-        if log_output:
-            return -torch.sum(normalized_S * torch.log(normalized_S + 1e-8)).item()
+        # --- 传统 Rank 的计算 ---
+        # 只有在SVD计算成功且S非空时才计算
+        traditional_rank = 0
+        if S is not None and S.numel() > 0:
+            # 使用PyTorch推荐的、稳健的阈值计算方法
+            tol = S.max() * max(centered.shape) * torch.finfo(S.dtype).eps
+            traditional_rank = torch.sum(S > tol).item()
         else:
-            return torch.exp(-torch.sum(normalized_S * torch.log(normalized_S + 1e-8))).item()
+            # 如果SVD失败或S为空，返回0
+            return 0.0, 0
+
+        # --- Effective Rank 的计算 ---
+        normalized_S = S / (S.sum() + 1e-8)
+        effective_rank_val = 0.0
+        if log_output:
+            effective_rank_val = -torch.sum(normalized_S * torch.log(normalized_S + 1e-8)).item()
+        else:
+            effective_rank_val = torch.exp(-torch.sum(normalized_S * torch.log(normalized_S + 1e-8))).item()
+            
+        return effective_rank_val, traditional_rank
+
     except torch._C._LinAlgError:
-        return 0.0
+        return 0.0, 0
 
 def compute_single_curvature(hidden: torch.Tensor) -> float:
     """计算单个样本的曲率"""
@@ -81,8 +100,9 @@ def calculate_diffs_for_single_sample(valid_hidden, max_seq_len, stride, selecte
     metric_calculators = {
         "Response Entropy 1": lambda h: compute_single_entropy(h, 1.0001, "gram"),
         "Curvature": lambda h: compute_single_curvature(h),
-        "Effective Rank": lambda h: compute_single_effective_rank(h, svd_rank, svd_niter, log_output=False, method=svd_method), # 传递新参数
-        "Log Effective Rank": lambda h: compute_single_effective_rank(h, svd_rank, svd_niter, log_output=True, method=svd_method) # 传递新参数
+        "Effective Rank": lambda h: compute_single_effective_rank(h, svd_rank, svd_niter, log_output=False, method=svd_method)[0],
+        "Log Effective Rank": lambda h: compute_single_effective_rank(h, svd_rank, svd_niter, log_output=True, method=svd_method)[0],
+        "Traditional Rank": lambda h: compute_single_effective_rank(h, svd_rank, svd_niter, method=svd_method)[1]
     }
     # ... (函数其余部分保持不变) ...
     active_calculators = [metric_calculators[name] for name in selected_metric_names if name in metric_calculators]

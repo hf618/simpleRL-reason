@@ -7,7 +7,7 @@ FULL_ARGS="$@"
 # The machine-specific variables are now inherited from the calling script's environment.
 # Default values are provided for key variables to ensure the script can run standalone for debugging.
 PROJECT_NAME=${PROJECT_NAME:-"verl_train_gong"}
-RUN_NAME=${RUN_NAME:-"verl-grpo"}
+RUN_NAME=${RUN_NAME:-"verl"}
 HDFS_DATA_PATH=${HDFS_DATA_PATH:-"/path/to/your/data"}
 HDFS_MODEL_PATH=${HDFS_MODEL_PATH:-"/path/to/your/models"}
 HDFS_CHECKPOINT_PATH=${HDFS_CHECKPOINT_PATH:-"./checkpoint"}
@@ -93,6 +93,8 @@ COMPUTE_GLOBAL_METRICS=False
 COMPUTE_CUMULATIVE_GLOBAL_METRICS=False
 GLOBAL_DIFF_STRIDE_TRAIN=${GLOBAL_DIFF_STRIDE_TRAIN:-1}
 GLOBAL_DIFF_STRIDE_VAL=${GLOBAL_DIFF_STRIDE_VAL:-20}
+
+EXCEPT_SAVE=""
 generate_suffix() {
   local suffix=""
   local dataset_provided=false
@@ -217,6 +219,7 @@ while [[ "$#" -gt 0 ]]; do
     --compute_cumulative_global_metrics) COMPUTE_CUMULATIVE_GLOBAL_METRICS="$2"; shift 2 ;;
     --global_diff_stride_train) GLOBAL_DIFF_STRIDE_TRAIN="$2"; shift 2 ;;
     --global_diff_stride_val) GLOBAL_DIFF_STRIDE_VAL="$2"; shift 2 ;;
+    --except_save) EXCEPT_SAVE="$2"; shift 2 ;;
     *)
       echo "Unknown option: $1"
       exit 1
@@ -321,6 +324,13 @@ echo "Add Reward enabled: $ADD_REWARD"
 echo "Compute Log Effective Rank: $COMPUTE_LOG_EFFECTIVE_RANK"
 echo "LOG FILE PATH: $LOG_FILE_PATH"
 
+# reward_manager
+if [ -n "$AUX_REWARD_GLOBAL_WEIGHT" ]; then
+  HYDRA_OVERRIDES+=("reward_manager.aux_reward_global_weight=$AUX_REWARD_GLOBAL_WEIGHT")
+fi
+if [ -n "$HYPOTHESIS_TYPE" ]; then
+  HYDRA_OVERRIDES+=("reward_manager.hypothesis_type=$HYPOTHESIS_TYPE")
+fi
 if [ -n "$REWARD_EMA_ALPHA" ]; then
   HYDRA_OVERRIDES+=("reward_manager.ema_alpha=$REWARD_EMA_ALPHA")
 fi
@@ -336,41 +346,24 @@ fi
 if [ -n "$ADD_REWARD" ]; then
   HYDRA_OVERRIDES+=("reward_manager.add_reward=$ADD_REWARD")
 fi
+if [ -n "$MODULATION_GAIN" ]; then
+  HYDRA_OVERRIDES+=("reward_manager.modulation_gain=$MODULATION_GAIN")
+fi
+if [ -n "$TOKEN_LEVEL_BASELINE_TYPE" ]; then
+  HYDRA_OVERRIDES+=("reward_manager.token_level_baseline_type=$TOKEN_LEVEL_BASELINE_TYPE")
+fi
+if [ -n "$AUX_FIX" ]; then
+  HYDRA_OVERRIDES+=("reward_manager.aux_fix=$AUX_FIX")
+fi
+# calculator
 if [ -n "$COMPUTE_LOG_EFFECTIVE_RANK" ]; then
   HYDRA_OVERRIDES+=("calculator.compute_log_effective_rank=$COMPUTE_LOG_EFFECTIVE_RANK")
 fi
 if [ -n "$METRIC_INDICES" ]; then
   HYDRA_OVERRIDES+=("calculator.metric_indices=$METRIC_INDICES")
 fi
-if [ -n "$MODULATION_GAIN" ]; then
-  HYDRA_OVERRIDES+=("reward_manager.modulation_gain=$MODULATION_GAIN")
-fi
 if [ -n "$OUTPUT_TOKEN_LEVEL_METRICS" ]; then
   HYDRA_OVERRIDES+=("calculator.output_token_level_metrics=$OUTPUT_TOKEN_LEVEL_METRICS")
-fi
-if [ -n "$CRITIC_MODEL_PATH" ]; then
-  HYDRA_OVERRIDES+=("critic.model.path=$CRITIC_MODEL_PATH")
-fi
-if [ -n "$TOKEN_LEVEL_BASELINE_TYPE" ]; then
-  HYDRA_OVERRIDES+=("reward_manager.token_level_baseline_type=$TOKEN_LEVEL_BASELINE_TYPE")
-fi
-if [ -n "$RETURN_HIDDEN_STATES" ]; then
-  HYDRA_OVERRIDES+=("actor_rollout_ref.rollout.return_hidden_states=$RETURN_HIDDEN_STATES")
-fi
-if [ -n "$RETURN_PREFILL" ]; then
-  HYDRA_OVERRIDES+=("actor_rollout_ref.rollout.return_prefill=$RETURN_PREFILL")
-fi
-if [ -n "$RETURN_DECODE" ]; then
-  HYDRA_OVERRIDES+=("actor_rollout_ref.rollout.return_decode=$RETURN_DECODE")
-fi
-if [ -n "$ADD_ADV" ]; then
-  HYDRA_OVERRIDES+=("algorithm.add_adv=$ADD_ADV")
-fi
-if [ -n "$AUX_FIX" ]; then
-  HYDRA_OVERRIDES+=("reward_manager.aux_fix=$AUX_FIX")
-fi
-if [ -n "$ADV_SHAPING_KAPPA" ]; then
-HYDRA_OVERRIDES+=("algorithm.adv_shaping_kappa=$ADV_SHAPING_KAPPA")
 fi
 if [ -n "$SVD_RANK" ]; then
   HYDRA_OVERRIDES+=("calculator.svd_rank=$SVD_RANK")
@@ -384,9 +377,6 @@ fi
 if [ -n "$DIFF_SVD_METHOD" ]; then
   HYDRA_OVERRIDES+=("calculator.diff_svd_method=$DIFF_SVD_METHOD")
 fi
-if [ -n "$HYPOTHESIS_TYPE" ]; then
-  HYDRA_OVERRIDES+=("reward_manager.hypothesis_type=$HYPOTHESIS_TYPE")
-fi
 if [ -n "$COMPUTE_GLOBAL_METRICS" ]; then 
   HYDRA_OVERRIDES+=("calculator.compute_global_metrics=$COMPUTE_GLOBAL_METRICS")
 fi
@@ -399,8 +389,28 @@ fi
 if [ -n "$GLOBAL_DIFF_STRIDE_VAL" ]; then 
   HYDRA_OVERRIDES+=("calculator.global_diff_stride_val=$GLOBAL_DIFF_STRIDE_VAL")
 fi
-if [ -n "$AUX_REWARD_GLOBAL_WEIGHT" ]; then
-  HYDRA_OVERRIDES+=("reward_manager.aux_reward_global_weight=$AUX_REWARD_GLOBAL_WEIGHT")
+# 
+if [ -n "$EXCEPT_SAVE" ]; then
+  # 在单引号 ' 前面加上了反斜杠 \ 进行转义
+  HYDRA_OVERRIDES+=("trainer.except_save=\'$EXCEPT_SAVE\'")
+fi
+if [ -n "$CRITIC_MODEL_PATH" ]; then
+  HYDRA_OVERRIDES+=("critic.model.path=$CRITIC_MODEL_PATH")
+fi
+if [ -n "$RETURN_HIDDEN_STATES" ]; then
+  HYDRA_OVERRIDES+=("actor_rollout_ref.rollout.return_hidden_states=$RETURN_HIDDEN_STATES")
+fi
+if [ -n "$RETURN_PREFILL" ]; then
+  HYDRA_OVERRIDES+=("actor_rollout_ref.rollout.return_prefill=$RETURN_PREFILL")
+fi
+if [ -n "$RETURN_DECODE" ]; then
+  HYDRA_OVERRIDES+=("actor_rollout_ref.rollout.return_decode=$RETURN_DECODE")
+fi
+if [ -n "$ADD_ADV" ]; then
+  HYDRA_OVERRIDES+=("algorithm.add_adv=$ADD_ADV")
+fi
+if [ -n "$ADV_SHAPING_KAPPA" ]; then
+HYDRA_OVERRIDES+=("algorithm.adv_shaping_kappa=$ADV_SHAPING_KAPPA")
 fi
 ray job submit --address=${HEAD_IP}:${HEAD_PORT} \
   --entrypoint-num-cpus=1 \

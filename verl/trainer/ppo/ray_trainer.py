@@ -566,6 +566,17 @@ class RayPPOTrainer(object):
         else:
             self.kl_ctrl = core_algos.FixedKLController(kl_coef=0.)
 
+        # 解析需要额外保存的步骤
+        self.extra_save_steps = set()
+        except_save_str = self.config.trainer.get("except_save", None)
+        if except_save_str: # 确保传入的不是空字符串
+            try:
+                # 通过逗号分割，去除空格，并转换为整数集合
+                self.extra_save_steps = set(int(s.strip()) for s in except_save_str.split(','))
+                print(f"已设置额外的Checkpoint保存步骤: {sorted(list(self.extra_save_steps))}")
+            except ValueError:
+                print(f"[警告] 无法解析 except_save 参数: '{except_save_str}'，将忽略此参数。")
+
         if self.config.algorithm.adv_estimator == 'gae':
             self.use_critic = True
         elif self.config.algorithm.adv_estimator == 'grpo':
@@ -1491,8 +1502,15 @@ class RayPPOTrainer(object):
                             val_metrics: dict = self._validate(timing_raw)
                         metrics.update(val_metrics)
 
-                    if self.config.trainer.save_freq > 0 and \
-                            self.global_steps % self.config.trainer.save_freq == 0:
+                    # 条件1：是否到达了均匀频率的保存点
+                    is_regular_save_step = (self.config.trainer.save_freq > 0 and
+                                            self.global_steps % self.config.trainer.save_freq == 0)
+
+                    # 条件2：当前步骤是否在我们指定的额外保存点列表中
+                    is_extra_save_step = self.global_steps in self.extra_save_steps
+
+                    # 只要满足任意一个条件，就执行保存
+                    if is_regular_save_step or is_extra_save_step:
                         with _timer('save_checkpoint', timing_raw):
                             self._save_checkpoint()
 
