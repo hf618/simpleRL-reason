@@ -156,7 +156,8 @@ def main_task(config, compute_score=None):
                                                 svd_rank=config.calculator.svd_rank, 
                                                  svd_niter=config.calculator.svd_niter,
                                                  zeroth_order_svd_method=config.calculator.zeroth_order_svd_method, 
-                                                 diff_svd_method=config.calculator.diff_svd_method 
+                                                 diff_svd_method=config.calculator.diff_svd_method,
+                                                 diff_calculator_method=config.calculator.diff_calculator_method
                                         )
 
 

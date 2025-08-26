@@ -211,7 +211,7 @@ calculator:
   diff_stride: 20
   enable: True
   compute_log_effective_rank: False
-  metric_indices: [0, 1, 2]
+  metric_indices: [0, 1, 2, 3] # "Response Entropy 1" "Effective Rank" "Traditional Rank" "Curvature"
   output_token_level_metrics: False 
   svd_rank: 50
   svd_niter: 5
@@ -221,4 +221,5 @@ calculator:
   compute_cumulative_global_metrics: False
   global_diff_stride_train: 1 
   global_diff_stride_val: 20  
+  diff_calculator_method: 'optimized' # optimized 或 original
   

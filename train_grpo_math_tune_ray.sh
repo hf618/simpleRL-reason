@@ -95,6 +95,8 @@ GLOBAL_DIFF_STRIDE_TRAIN=${GLOBAL_DIFF_STRIDE_TRAIN:-1}
 GLOBAL_DIFF_STRIDE_VAL=${GLOBAL_DIFF_STRIDE_VAL:-20}
 
 EXCEPT_SAVE=""
+
+DIFF_CALCULATOR_METHOD="optimized"
 generate_suffix() {
   local suffix=""
   local dataset_provided=false
@@ -220,6 +222,7 @@ while [[ "$#" -gt 0 ]]; do
     --global_diff_stride_train) GLOBAL_DIFF_STRIDE_TRAIN="$2"; shift 2 ;;
     --global_diff_stride_val) GLOBAL_DIFF_STRIDE_VAL="$2"; shift 2 ;;
     --except_save) EXCEPT_SAVE="$2"; shift 2 ;;
+    --diff_calculator_method) DIFF_CALCULATOR_METHOD="$2"; shift 2 ;;
     *)
       echo "Unknown option: $1"
       exit 1
@@ -389,6 +392,9 @@ fi
 if [ -n "$GLOBAL_DIFF_STRIDE_VAL" ]; then 
   HYDRA_OVERRIDES+=("calculator.global_diff_stride_val=$GLOBAL_DIFF_STRIDE_VAL")
 fi
+if [ -n "$DIFF_CALCULATOR_METHOD" ]; then 
+  HYDRA_OVERRIDES+=("calculator.diff_calculator_method=$DIFF_CALCULATOR_METHOD")
+fi
 # 
 if [ -n "$EXCEPT_SAVE" ]; then
   # 在单引号 ' 前面加上了反斜杠 \ 进行转义
@@ -448,7 +454,7 @@ ray job submit --address=${HEAD_IP}:${HEAD_PORT} \
   actor_rollout_ref.ref.fsdp_config.param_offload=True \
   actor_rollout_ref.actor.fsdp_config.param_offload=True\
   actor_rollout_ref.actor.fsdp_config.grad_offload=True \
-  actor_rollout_ref.actor.fsdp_config.optimizer_offload=False \
+  actor_rollout_ref.actor.fsdp_config.optimizer_offload=True \
   actor_rollout_ref.model.enable_gradient_checkpointing=True \
   algorithm.kl_ctrl.kl_coef=$KL_COEF \
   critic.ppo_micro_batch_size_per_gpu=$PPO_MICRO_BATCH_SIZE \

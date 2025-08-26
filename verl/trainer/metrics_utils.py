@@ -6,21 +6,23 @@ import torch.nn.functional as F
 import os
 import ray 
 
-# --- 所有单一计算逻辑函数保持不变 ---
+# --- 单一计算函数：提升精度以作为精确基准 ---
 def compute_single_entropy(hidden: torch.Tensor, alpha: float = 1.0001, matrix_type: str = 'gram') -> float:
     """计算单个样本的熵"""
     assert matrix_type in ['covariance', 'gram'], "matrix_type must be 'covariance' or 'gram'"
     if hidden.size(0) < 2: return 0.0
     try:
-        centered = hidden - hidden.mean(dim=0, keepdim=True)
+        # 提前将输入转为float32，以进行高精度计算
+        hidden_f32 = hidden.to(torch.float32)
+        centered = hidden_f32 - hidden_f32.mean(dim=0, keepdim=True)
+        
         matrix = None
         if matrix_type == 'covariance':
             matrix = centered.T @ centered / (centered.size(0) - 1)
         else: # 'gram'
             matrix = centered @ centered.T
         
-        matrix = matrix.to(torch.float32)
-        eigvals = torch.linalg.eigvalsh(matrix) # 始终计算全部特征值
+        eigvals = torch.linalg.eigvalsh(matrix) # matrix 已经是 float32
         eigvals = eigvals[eigvals > 1e-8]
         if len(eigvals) == 0: return 0.0
         
@@ -33,36 +35,28 @@ def compute_single_entropy(hidden: torch.Tensor, alpha: float = 1.0001, matrix_t
     except torch._C._LinAlgError:
         return 0.0
 
-def compute_single_effective_rank(hidden: torch.Tensor, svd_rank: int, svd_niter: int, log_output: bool = False, method: str = 'lowrank') -> tuple[float, int]:
-    """
-    计算单个样本的有效秩和传统秩。
-    高效地只执行一次SVD计算。
-    返回: (effective_rank, traditional_rank)
-    """
+def compute_single_effective_rank(hidden: torch.Tensor, svd_rank: int, svd_niter: int, log_output: bool = False, method: str = 'lowrank') -> tuple[float, float]:
+    """计算单个样本的有效秩和传统秩。"""
     assert method in ['lowrank', 'full'], "SVD method must be 'lowrank' or 'full'"
     if hidden.size(0) < 2: return 0.0, 0
-    
     try:
-        centered = hidden - hidden.mean(dim=0, keepdim=True)
-        centered = centered.to(torch.float32)
+        # 提前将输入转为float32，以进行高精度中心化
+        hidden_f32 = hidden.to(torch.float32)
+        centered = hidden_f32 - hidden_f32.mean(dim=0, keepdim=True)
+
         S = None
         if method == 'lowrank':
             _, S, _ = torch.svd_lowrank(centered, q=min(svd_rank, min(centered.shape)), niter=svd_niter)
         else: # 'full'
             S = torch.linalg.svdvals(centered)
             
-        # --- 传统 Rank 的计算 ---
-        # 只有在SVD计算成功且S非空时才计算
         traditional_rank = 0
         if S is not None and S.numel() > 0:
-            # 使用PyTorch推荐的、稳健的阈值计算方法
             tol = S.max() * max(centered.shape) * torch.finfo(S.dtype).eps
             traditional_rank = torch.sum(S > tol).item()
         else:
-            # 如果SVD失败或S为空，返回0
-            return 0.0, 0
+            return 0.0, 0.0
 
-        # --- Effective Rank 的计算 ---
         normalized_S = S / (S.sum() + 1e-8)
         effective_rank_val = 0.0
         if log_output:
@@ -70,10 +64,9 @@ def compute_single_effective_rank(hidden: torch.Tensor, svd_rank: int, svd_niter
         else:
             effective_rank_val = torch.exp(-torch.sum(normalized_S * torch.log(normalized_S + 1e-8))).item()
             
-        return effective_rank_val, traditional_rank
-
+        return effective_rank_val, float(traditional_rank)
     except torch._C._LinAlgError:
-        return 0.0, 0
+        return 0.0, 0.0
 
 def compute_single_curvature(hidden: torch.Tensor) -> float:
     """计算单个样本的曲率"""
@@ -94,9 +87,118 @@ def compute_single_curvature(hidden: torch.Tensor) -> float:
         return torch.cat(angles).mean().item()
     return 0.0
 
-def calculate_diffs_for_single_sample(valid_hidden, max_seq_len, stride, selected_metric_names, 
-                                      svd_rank, svd_niter, svd_method): # 增加 svd_niter 参数
-    """为单个样本的隐藏状态计算所有选定指标的一阶和二阶差分。"""
+def _get_metrics_from_eigenvalues(eigenvalues, selected_metric_names):
+    """辅助函数：根据格拉姆矩阵的特征值计算所有需要的指标"""
+    S = torch.sqrt(torch.relu(eigenvalues))
+    results = []
+    for name in selected_metric_names:
+        if name == "Response Entropy 1":
+            eigvals = eigenvalues[eigenvalues > 1e-8]
+            if len(eigvals) == 0:
+                results.append(0.0)
+                continue
+            normalized = eigvals / eigvals.sum()
+            normalized = normalized[normalized > 1e-12]
+            entropy = -torch.sum(normalized * torch.log(normalized)).item()
+            results.append(entropy)
+        elif name in ["Effective Rank", "Log Effective Rank", "Traditional Rank"]:
+            normalized_S = S / (S.sum() + 1e-8)
+            shannon_entropy_S = -torch.sum(normalized_S * torch.log(normalized_S + 1e-8)).item()
+            if name == "Effective Rank":
+                results.append(torch.exp(torch.tensor(shannon_entropy_S)).item())
+            elif name == "Log Effective Rank":
+                results.append(shannon_entropy_S)
+            elif name == "Traditional Rank":
+                if S.numel() > 0:
+                    tol = S.max() * max(S.shape) * torch.finfo(S.dtype).eps
+                    trad_rank = torch.sum(S > tol).item()
+                    results.append(float(trad_rank))
+                else:
+                    results.append(0.0)
+        elif name == "Curvature":
+            results.append(0.0)
+        else:
+            results.append(0.0)
+    return results
+
+def calculate_diffs_for_single_sample_optimized(valid_hidden, max_seq_len, stride, selected_metric_names, 
+                                                svd_rank, svd_niter, svd_method):
+    """
+    [最终生产版] 高效、精确、逻辑正确的优化函数。
+    此版本通过在高精度下进行增量累加来确保数值稳定性和正确性。
+    """
+    valid_len = valid_hidden.size(0)
+    if valid_len > max_seq_len:
+        valid_hidden = valid_hidden[-max_seq_len:]
+        valid_len = max_seq_len
+
+    per_stride_diffs_i = {f"{name} diff": [] for name in selected_metric_names}
+    per_stride_diffs_i.update({f"{name} diff 2": [] for name in selected_metric_names})
+    
+    if valid_len < 2 * stride:
+        return per_stride_diffs_i
+
+    history_sum = [0.0] * len(selected_metric_names)
+    history_count = 0
+    prev_diff = None
+
+    # 状态变量和计算全程使用 float32
+    s = torch.zeros(1, valid_hidden.shape[1], device=valid_hidden.device, dtype=torch.float32)
+    U = None
+    H_old = None
+
+    for t in range(stride, valid_len, stride):
+        current_window = valid_hidden[:t+1]
+        current_window_f32 = current_window.to(torch.float32)
+        
+        new_chunk = current_window_f32[len(H_old) if H_old is not None else 0:]
+
+        s = s + new_chunk.sum(dim=0, keepdim=True)
+        
+        if U is None: 
+            U = new_chunk @ new_chunk.T
+        else:
+            C12 = H_old @ new_chunk.T
+            C22 = new_chunk @ new_chunk.T
+            top_part = torch.cat([U, C12], dim=1)
+            bottom_part = torch.cat([C12.T, C22], dim=1)
+            U = torch.cat([top_part, bottom_part], dim=0)
+
+        k = current_window_f32.shape[0]
+        mean_vec = s / k
+        mean_gram = mean_vec @ mean_vec.T
+        hs_T = current_window_f32 @ s.T / k
+        
+        ones_k = torch.ones((k, 1), device=current_window_f32.device, dtype=torch.float32)
+        G = U - hs_T @ ones_k.T - ones_k @ hs_T.T + mean_gram
+        
+        eigenvalues = torch.linalg.eigvalsh(G)
+        current_metrics = _get_metrics_from_eigenvalues(eigenvalues, selected_metric_names)
+
+        if "Curvature" in selected_metric_names:
+            current_metrics[selected_metric_names.index("Curvature")] = compute_single_curvature(current_window)
+
+        if history_count > 0:
+            hist_avg = [sm / history_count for sm in history_sum]
+            curr_diff = [(curr - avg) for curr, avg in zip(current_metrics, hist_avg)]
+            for idx, name in enumerate(selected_metric_names): 
+                per_stride_diffs_i[f"{name} diff"].append(curr_diff[idx])
+            if prev_diff is not None:
+                curr_diff2 = [(cd - pd) for cd, pd in zip(curr_diff, prev_diff)]
+                for idx, name in enumerate(selected_metric_names): 
+                    per_stride_diffs_i[f"{name} diff 2"].append(curr_diff2[idx])
+            prev_diff = curr_diff
+            
+        history_sum = [sm + curr for sm, curr in zip(history_sum, current_metrics)]
+        history_count += 1
+        
+        H_old = current_window_f32
+            
+    return per_stride_diffs_i
+
+def calculate_diffs_for_single_sample_original(valid_hidden, max_seq_len, stride, selected_metric_names, 
+                                      svd_rank, svd_niter, svd_method):
+    """为单个样本的隐藏状态计算所有选定指标的一阶和二阶差分。(基准版本)"""
     metric_calculators = {
         "Response Entropy 1": lambda h: compute_single_entropy(h, 1.0001, "gram"),
         "Curvature": lambda h: compute_single_curvature(h),
@@ -104,19 +206,19 @@ def calculate_diffs_for_single_sample(valid_hidden, max_seq_len, stride, selecte
         "Log Effective Rank": lambda h: compute_single_effective_rank(h, svd_rank, svd_niter, log_output=True, method=svd_method)[0],
         "Traditional Rank": lambda h: compute_single_effective_rank(h, svd_rank, svd_niter, method=svd_method)[1]
     }
-    # ... (函数其余部分保持不变) ...
     active_calculators = [metric_calculators[name] for name in selected_metric_names if name in metric_calculators]
     num_metrics_to_track = len(active_calculators)
     valid_len = valid_hidden.size(0)
-    history_sum, history_count, prev_diff = [0.0] * num_metrics_to_track, 0, None
-    per_stride_diffs_i = {f"{name} diff": [] for name in selected_metric_names}
-    per_stride_diffs_i.update({f"{name} diff 2": [] for name in selected_metric_names})
     if valid_len > max_seq_len:
         valid_hidden = valid_hidden[-max_seq_len:]
         valid_len = max_seq_len
-    for t in range(1, valid_len):
-        if t % stride != 0: continue
-        sub_hidden = valid_hidden[max(0, t - max_seq_len + 1):t+1]
+
+    history_sum, history_count, prev_diff = [0.0] * num_metrics_to_track, 0, None
+    per_stride_diffs_i = {f"{name} diff": [] for name in selected_metric_names}
+    per_stride_diffs_i.update({f"{name} diff 2": [] for name in selected_metric_names})
+
+    for t in range(stride, valid_len, stride):
+        sub_hidden = valid_hidden[:t+1]
         current_metrics = [calc(sub_hidden) for calc in active_calculators]
         if history_count > 0:
             hist_avg = [s / history_count for s in history_sum]
@@ -131,6 +233,7 @@ def calculate_diffs_for_single_sample(valid_hidden, max_seq_len, stride, selecte
         history_sum = [s + curr for s, curr in zip(history_sum, current_metrics)]
         history_count += 1
     return per_stride_diffs_i
+
 
 
 @ray.remote
@@ -169,14 +272,16 @@ class MetricCalculatorActor:
 
     # (D) 差分计算：处理任务块
     def process_diff_chunk(self, chunk_of_args):
-        # 修改 6/6: 修改 - Actor现在直接调用共享函数，不再需要内部的 _process_single_diff 方法。
-        # Actor的职责被简化为任务分发和结果收集。
         results = []
         for index, args in chunk_of_args:
-            valid_hidden, max_seq_len, stride, selected_metric_names = args
-            # 调用新的共享函数
-            result = calculate_diffs_for_single_sample(
-                valid_hidden, max_seq_len, stride, selected_metric_names, self.svd_rank
+            # 假设 args 的顺序是 (valid_hidden, max_seq_len, stride, selected_metric_names, svd_niter, svd_method)
+            # 这个顺序需要在调用方 (metrics_calculator.py 的并行版本) 中保证
+            valid_hidden, max_seq_len, stride, selected_metric_names, svd_niter, svd_method = args
+            
+            # 调用最终的生产函数，并传递所有参数
+            result = calculate_diffs_for_single_sample_optimized(
+                valid_hidden, max_seq_len, stride, selected_metric_names, 
+                self.svd_rank, svd_niter, svd_method
             )
             results.append((index, result))
         return results

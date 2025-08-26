@@ -21,7 +21,8 @@ class RepresentationMetricsCalculator():
                  svd_niter: int = 5,
                  compute_log_effective_rank: bool = False,
                  compute_global_metrics: bool = False,
-                 compute_cumulative_global_metrics: bool = False
+                 compute_cumulative_global_metrics: bool = False,
+                 diff_calculator_method: str = 'optimized' 
                  ):
         """
         Initializes the RepresentationMetricsCalculator.
@@ -49,6 +50,8 @@ class RepresentationMetricsCalculator():
         self.diff_svd_method = diff_svd_method
         self.svd_rank = svd_rank
         self.svd_niter = svd_niter
+
+        self.diff_calculator_method = diff_calculator_method
 
         # 定义所有可用的基础指标和它们的计算函数
         all_base_metrics = [
@@ -91,7 +94,9 @@ class RepresentationMetricsCalculator():
                 
                 per_stride_diffs = {}
                 if compute_diff:
-                    final_diffs, per_stride_diffs = self.calculate_metric_diff(layer_hidden, attention_mask, diff_stride)
+                    final_diffs, per_stride_diffs = self.calculate_metric_diff(
+                        layer_hidden, attention_mask, diff_stride
+                    )
                     base_metrics.update(final_diffs)
                 
                 if self.output_token_level_metrics:
@@ -117,6 +122,24 @@ class RepresentationMetricsCalculator():
                 self._free_memory()
                 
             return results
+
+    def _aggregate_diffs(self, all_per_stride_diffs, batch_size, device, selected_metric_names):
+        """辅助函数，用于从 per-stride 结果聚合最终的 diff 张量。"""
+        final_diffs = {f"{name} diff": torch.zeros(batch_size, device=device) for name in selected_metric_names}
+        final_diffs.update({f"{name} diff 2": torch.zeros(batch_size, device=device) for name in selected_metric_names})
+        
+        for i in range(batch_size):
+            per_stride_diffs_i = all_per_stride_diffs[i]
+            for name in selected_metric_names:
+                diff_key = f"{name} diff"
+                if diff_key in per_stride_diffs_i and per_stride_diffs_i[diff_key]:
+                    final_diffs[diff_key][i] = torch.tensor(per_stride_diffs_i[diff_key]).mean()
+                
+                diff2_key = f"{name} diff 2"
+                if diff2_key in per_stride_diffs_i and per_stride_diffs_i[diff2_key]:
+                    final_diffs[diff2_key][i] = torch.tensor(per_stride_diffs_i[diff2_key]).mean()
+
+        return final_diffs
 
     def _distribute_value_by_scaling(self, seq_level_tensor, per_stride_values_list, attention_mask, stride):
         """
@@ -224,32 +247,45 @@ class RepresentationMetricsCalculator():
  
     def calculate_metric_diff(self, hidden_states, attention_mask, stride):
         batch_size, _, _ = hidden_states.shape
-        device = hidden_states.device
         selected_metric_names = [name for name, _ in self.selected_metrics]
-        final_diffs = {f"{name} diff": torch.zeros(batch_size, device=device) for name in selected_metric_names}
-        final_diffs.update({f"{name} diff 2": torch.zeros(batch_size, device=device) for name in selected_metric_names})
-        per_stride_diffs = {f"{name} diff": [[] for _ in range(batch_size)] for name in selected_metric_names}
-        per_stride_diffs.update({f"{name} diff 2": [[] for _ in range(batch_size)] for name in selected_metric_names})
+        
+        all_per_stride_diffs = []
+
+        # 根据 self.diff_calculator_method 选择要调用的函数
+        if self.diff_calculator_method == 'optimized':
+            target_func = metrics_utils.calculate_diffs_for_single_sample_optimized
+        else:
+            target_func = metrics_utils.calculate_diffs_for_single_sample_original
 
         for i in range(batch_size):
             mask = attention_mask[i].bool()
             valid_hidden = hidden_states[i, mask, :]
-            if valid_hidden.size(0) < 2: continue
-
-            # 在这里传递 diff_svd_method
-            per_stride_diffs_i = metrics_utils.calculate_diffs_for_single_sample(
-                                    valid_hidden, self.max_seq_len, stride, selected_metric_names, 
-                                    self.svd_rank, self.svd_niter, self.diff_svd_method # 传递新参数
-                                )
             
-            # ... (聚合逻辑不变) ...
-            for name in selected_metric_names:
-                diff_key = f"{name} diff"
-                if diff_key in per_stride_diffs_i and per_stride_diffs_i[diff_key]:
-                    final_diffs[diff_key][i] = torch.tensor(per_stride_diffs_i[diff_key]).mean()
-                diff2_key = f"{name} diff 2"
-                if diff2_key in per_stride_diffs_i and per_stride_diffs_i[diff2_key]:
-                    final_diffs[diff2_key][i] = torch.tensor(per_stride_diffs_i[diff2_key]).mean()
+            if valid_hidden.size(0) < 2:
+                # 构造一个空的 diff 结果
+                empty_result = {f"{name} diff": [] for name in selected_metric_names}
+                empty_result.update({f"{name} diff 2": [] for name in selected_metric_names})
+                all_per_stride_diffs.append(empty_result)
+                continue
+
+            per_stride_diffs_i = target_func(
+                valid_hidden, self.max_seq_len, stride, selected_metric_names, 
+                self.svd_rank, self.svd_niter, self.diff_svd_method
+            )
+            all_per_stride_diffs.append(per_stride_diffs_i)
+            
+        # 聚合结果
+        device = hidden_states.device
+        final_diffs = self._aggregate_diffs(all_per_stride_diffs, batch_size, device, selected_metric_names)
+
+        # 构造 per_stride_diffs (用于 token-level 输出)
+        per_stride_diffs = {f"{name} diff": [[] for _ in range(batch_size)] for name in selected_metric_names}
+        per_stride_diffs.update({f"{name} diff 2": [[] for _ in range(batch_size)] for name in selected_metric_names})
+        for i in range(batch_size):
+            for key in per_stride_diffs.keys():
+                if key in all_per_stride_diffs[i]:
+                    per_stride_diffs[key][i] = all_per_stride_diffs[i][key]
+
         return final_diffs, per_stride_diffs
     
 
@@ -309,8 +345,10 @@ class RepresentationMetricsCalculator():
 
         batch_size = hidden_states.shape[0]
         device = hidden_states.device
-        effective_ranks = torch.zeros(batch_size, device=device)
-        traditional_ranks = torch.zeros(batch_size, device=device, dtype=torch.int32)
+
+        effective_ranks = torch.zeros(batch_size, device=device, dtype=torch.bfloat16)
+        traditional_ranks = torch.zeros(batch_size, device=device, dtype=torch.bfloat16)
+
 
         for i in range(batch_size):
             mask = attention_mask[i].bool()
