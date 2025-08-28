@@ -97,6 +97,7 @@ GLOBAL_DIFF_STRIDE_VAL=${GLOBAL_DIFF_STRIDE_VAL:-20}
 EXCEPT_SAVE=""
 
 DIFF_CALCULATOR_METHOD="optimized"
+TOTAL_STEPS=""
 generate_suffix() {
   local suffix=""
   local dataset_provided=false
@@ -223,6 +224,7 @@ while [[ "$#" -gt 0 ]]; do
     --global_diff_stride_val) GLOBAL_DIFF_STRIDE_VAL="$2"; shift 2 ;;
     --except_save) EXCEPT_SAVE="$2"; shift 2 ;;
     --diff_calculator_method) DIFF_CALCULATOR_METHOD="$2"; shift 2 ;;
+    --total_steps) TOTAL_STEPS="$2"; shift 2 ;;
     *)
       echo "Unknown option: $1"
       exit 1
@@ -417,6 +419,9 @@ if [ -n "$ADD_ADV" ]; then
 fi
 if [ -n "$ADV_SHAPING_KAPPA" ]; then
 HYDRA_OVERRIDES+=("algorithm.adv_shaping_kappa=$ADV_SHAPING_KAPPA")
+fi
+if [ -n "$TOTAL_STEPS" ]; then
+    HYDRA_OVERRIDES+=("trainer.total_training_steps=$TOTAL_STEPS")
 fi
 ray job submit --address=${HEAD_IP}:${HEAD_PORT} \
   --entrypoint-num-cpus=1 \

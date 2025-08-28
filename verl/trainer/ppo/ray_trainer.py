@@ -793,11 +793,11 @@ class RayPPOTrainer(object):
                 if use_calculator and 'hidden_states_decode' in test_batch.batch:
 
                     diff_stride_val = self.config.calculator.get('diff_stride', 20)
-                    hidden_for_calc = test_batch.batch['hidden_states_decode'] # # [10, 2048, 2, 896]
+                    # test_batch.batch['hidden_states_decode'] [10, 2048, 2, 896]
                     
                     # --- 1. 原有的单样本指标计算 (不变) ---
                     test_batch.batch['calculator_results'] = self.calculator(
-                        hidden_states=hidden_for_calc,
+                        hidden_states=test_batch.batch['hidden_states_decode'],
                         attention_mask=response_attention_mask,
                         compute_diff=True,
                         diff_stride=diff_stride_val
@@ -806,7 +806,7 @@ class RayPPOTrainer(object):
 
                     with _timer('testing_cal_global', timing_raw):
                         val_stride = self.config.calculator.get('global_diff_stride_val', 20)
-                        aggregated_metrics = self._compute_aggregated_metrics(hidden_for_calc, response_attention_mask, stride=val_stride)
+                        aggregated_metrics = self._compute_aggregated_metrics(test_batch.batch['hidden_states_decode'], response_attention_mask, stride=val_stride)
                 
 
                     
@@ -958,10 +958,10 @@ class RayPPOTrainer(object):
             metric_dict[f'val/test_incorrect_len/{data_source}'] = np.mean(incorrect_lengths) if incorrect_lengths else 0.0
 
         
-        if 'hidden_states_decode' in test_batch.batch:
-            del test_batch.batch['hidden_states_decode']
-        if 'calculator_results' in test_batch.batch:
-            del test_batch.batch['calculator_results']
+        # if 'hidden_states_decode' in test_batch.batch:
+        #     del test_batch.batch['hidden_states_decode']
+        # if 'calculator_results' in test_batch.batch:
+        #     del test_batch.batch['calculator_results']
 
         return metric_dict
 
@@ -1356,7 +1356,7 @@ class RayPPOTrainer(object):
                         if use_calculator and 'hidden_states_decode' in batch.batch:
                             
                             # 0. 为了高效，先将需要的数据暂存
-                            hidden_for_calc = batch.batch['hidden_states_decode']
+                            
                             prompt_len = batch.batch['prompts'].shape[1]
                             response_attention_mask = batch.batch['attention_mask'][:, prompt_len:]
                             diff_stride_train = self.config.calculator.get('diff_stride', 20)
@@ -1364,7 +1364,7 @@ class RayPPOTrainer(object):
 
                             # 1. 执行原有的“单样本”指标计算，结果存入 batch 供后续处理
                             batch.batch['calculator_results'] = self.calculator(
-                                hidden_states=hidden_for_calc,
+                                hidden_states=batch.batch['hidden_states_decode'],
                                 attention_mask=response_attention_mask,
                                 compute_diff=True,
                                 diff_stride=diff_stride_train
@@ -1372,7 +1372,7 @@ class RayPPOTrainer(object):
 
                             with _timer('cal_global', timing_raw):
                                 train_stride = self.config.calculator.get('global_diff_stride_train', 1)
-                                aggregated_metrics = self._compute_aggregated_metrics(hidden_for_calc, response_attention_mask, stride=train_stride)
+                                aggregated_metrics = self._compute_aggregated_metrics(batch.batch['hidden_states_decode'], response_attention_mask, stride=train_stride)
 
                         
                                 # 将返回的指标添加 'train/' 前缀并更新到主 metrics 字典
@@ -1381,7 +1381,7 @@ class RayPPOTrainer(object):
                                         log_key = f"train/layer_{layer}/{name}"
                                         metrics[log_key] = value
 
-                            del batch.batch['hidden_states_decode'], hidden_for_calc
+                            # del batch.batch['hidden_states_decode']
 
                     
                     if self.config.trainer.remove_clip:
@@ -1477,7 +1477,7 @@ class RayPPOTrainer(object):
 
                     if use_calculator and 'calculator_results' in batch.batch:
                         metrics.update(compute_calculator_metrics(batch.batch['calculator_results'], batch.batch['correctness'], self.reward_fn.mids))
-                        del batch.batch['calculator_results']
+                        # del batch.batch['calculator_results']
 
                     # update critic
                     if self.use_critic:
