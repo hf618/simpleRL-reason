@@ -427,7 +427,7 @@ ray job submit --address=${HEAD_IP}:${HEAD_PORT} \
   --entrypoint-num-cpus=1 \
   --runtime-env-json="${RAY_RUNTIME_ENV_JSON}" \
   -- python -m verl.trainer.main_ppo \
-  algorithm.adv_estimator=grpo \
+  algorithm.adv_estimator=$ADV_ESTIMATOR \
   data.train_files=$HDFS_DATA_PATH/$DATASET_NAME/train.parquet \
   data.val_files=$HDFS_DATA_PATH/$DATASET_NAME/test.parquet \
   data.train_batch_size=$TRAIN_BATCH_SIZE \

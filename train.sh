@@ -77,14 +77,14 @@ export RAY_RUNTIME_ENV_JSON="{
 # 4. All effective rank and entropy calculation via centered matrix
 # 5. If use PPO: critic_model_path give absolute path, set rollout_n as 1 and adv_estimator "gae"
 bash train_grpo_math_tune_ray.sh \
-    --model_name qwen/Qwen2.5-1.5B --max_prompt_length 512 --max_response_length 1024 \
-    --critic_model_path "" --adv_estimator "grpo" \
-    --exp_name "GRPOorigin" --add_reward False --add_adv False \
-    --train_batch_size 48 --ppo_mini_batch_size 24 --val_batch_size 48  --rollout_n 4 \
+    --model_name qwen/Qwen2.5-1.5B --max_prompt_length 512 --max_response_length 1536 \
+    --critic_model_path "/media/root1/4t/Models/deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B" --adv_estimator "gae" \
+    --exp_name "PPOorigin" --add_reward False --add_adv False \
+    --train_batch_size 48 --ppo_mini_batch_size 24 --val_batch_size 48  --rollout_n 1 \
     --ppo_micro_batch_size 1 --log_prob_micro_batch_size 12 --micro_rollout_batch_size 12 \
-    --compute_global_metrics True --compute_cumulative_global_metrics True --global_diff_stride_train 20 --global_diff_stride_val 20 \
+    --compute_global_metrics True --compute_cumulative_global_metrics True --global_diff_stride_train 5 --global_diff_stride_val 20 \
     --kl_loss_coef 0.001 --entropy_coeffient 0.001 --rollout_gpu_memory_util 0.70 --logger_config "['console','wandb']" \
-    --rollout_tp 1 --save_freq 40 --except_save "100" --test_freq 10 --total_epochs 2 \
+    --rollout_tp 1 --save_freq 80 --except_save "" --test_freq 10 --total_epochs 2 --total_steps 321 \
     --hypothesis_type "PlanB" --dataset_name "simplelr_abel_level3to5" \
     --val_before_train True --val_sample_size -1 --enable_calculator True --metric_indices "[1,2]" \
     --reward_weights "[0.0, 0.0, 1.0]" --reward_weights_exploit "[0.0, 1.0, 0.0]" \
