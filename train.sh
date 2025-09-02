@@ -83,7 +83,7 @@ bash train_grpo_math_tune_ray.sh \
     --train_batch_size 48 --ppo_mini_batch_size 24 --val_batch_size 48  --rollout_n 1 \
     --ppo_micro_batch_size 1 --log_prob_micro_batch_size 12 --micro_rollout_batch_size 12 \
     --compute_global_metrics True --compute_cumulative_global_metrics True --global_diff_stride_train 5 --global_diff_stride_val 20 \
-    --kl_loss_coef 0.001 --entropy_coeffient 0.001 --rollout_gpu_memory_util 0.70 --logger_config "['console','wandb']" \
+    --kl_loss_coef 0.001 --entropy_coefficient 0.001 --rollout_gpu_memory_util 0.70 --logger_config "['console','wandb']" \
     --rollout_tp 1 --save_freq 80 --except_save "" --test_freq 10 --total_epochs 2 --total_steps 321 \
     --hypothesis_type "PlanB" --dataset_name "simplelr_abel_level3to5" \
     --val_before_train True --val_sample_size -1 --enable_calculator True --metric_indices "[1,2]" \

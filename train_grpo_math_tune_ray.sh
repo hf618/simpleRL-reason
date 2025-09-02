@@ -98,116 +98,64 @@ EXCEPT_SAVE=""
 
 DIFF_CALCULATOR_METHOD="optimized"
 TOTAL_STEPS=""
-generate_suffix() {
-  local suffix=""
-  local dataset_provided=false
-  local suffix_provided=false
-
-  while [[ "$#" -gt 0 ]]; do
-    case $1 in
-      --train_batch_size) suffix+="_batch$2"; shift 2 ;;
-      --val_batch_size) suffix+="_valbatch$2"; shift 2 ;;
-      --max_prompt_length) suffix+="_max_prompt$2"; shift 2 ;;
-      --max_response_length) suffix+="_max_response$2"; shift 2 ;;
-      --learning_rate) suffix+="_lr$2"; shift 2 ;;
-      --ppo_mini_batch_size) suffix+="_ppomini$2"; shift 2 ;;
-      --ppo_micro_batch_size) shift 2 ;;
-      --kl_loss_coef) suffix+="_klcoef$2"; shift 2 ;;
-      --entropy_coeffient) suffix+="_entcoef$2"; shift 2 ;;
-      --clip_ratio) suffix+="_clipratio$2"; shift 2 ;;
-      --kl_loss_type) suffix+="_kltype$2"; shift 2 ;;
-      --temperature) suffix+="_temp$2"; shift 2 ;;
-      --log_prob_micro_batch_size) suffix+="_logprobbatch$2"; shift 2 ;;
-      --rollout_n) suffix+="_rollout$2"; shift 2 ;;
-      --kl_coef) suffix+="_klcontrol$2"; shift 2 ;;
-      --total_epochs) suffix+="_epochs$2"; shift 2 ;;
-      --rollout_gpu_memory_util) shift 2 ;;
-      --dataset_name) suffix+="_$2"; dataset_provided=true; shift 2 ;;
-      --remove_clip) suffix+="_remove_clip$2"; shift 2 ;;
-      --suffix) input_suffix="$2"; suffix_provided=true; shift 2 ;;
-      --logger_config) LOGGER_CONFIG="$2"; shift 2 ;;
-      --exp_name) EXP_NAME="$2"; shift 2 ;;
-      --diff_stride) suffix+="_stride$2"; shift 2 ;;
-      --reward_ema_alpha) suffix+="_ema$2"; shift 2 ;;
-      --modulation_gain) suffix+="_mgain$2"; shift 2 ;;
-      --aux_reward_global_weight) suffix+="_auxgw$2"; shift 2 ;;
-      --adv_estimator) suffix+="_$2"; shift 2 ;;
-      --critic_model_path) shift 2 ;;
-      *) shift ;;
-    esac
-  done
-
-  # 如果命令行中没有提供 --dataset_name，则使用默认值
-  # 因为上面设置了标志位，所以这里不会重复添加
-  # if [ "$dataset_provided" = false ]; then
-  #   suffix+="_$DATASET_NAME"
-  # fi
-
-  if [ "$suffix_provided" = true ]; then
-    suffix+="_$input_suffix"
-  fi
-  
-  echo "$suffix"
-}
 
 echo "Arguments received: $@"
 
-# Generate a unique suffix based on the input arguments
-SUFFIX=$(generate_suffix "$@")
-RUN_NAME="$RUN_NAME$SUFFIX"
-LOG_FILE_PATH="$HDFS_LOG_PATH/$RUN_NAME.log"
-EXP_NAME=${exp_name}
+# --- 统一参数解析与Sufix生成 ---
+# 在一个循环内完成所有操作：为变量赋值，并动态构建后缀字符串。
 
-# Parse named arguments
+SUFFIX_PARTS="" # 用于构建后缀
+
+# 解析所有命名参数
 while [[ "$#" -gt 0 ]]; do
-  echo "Processing: $1"
+  # echo "Processing: $1" # 调试时可以取消注释
   case "$1" in
-    --train_batch_size) TRAIN_BATCH_SIZE="$2"; shift 2 ;;
-    --val_batch_size) VAL_BATCH_SIZE="$2"; shift 2 ;;
-    --max_prompt_length) MAX_PROMPT_LENGTH="$2"; shift 2 ;;
-    --max_response_length) MAX_RESPONSE_LENGTH="$2"; shift 2 ;;
-    --learning_rate) LEARNING_RATE="$2"; shift 2 ;;
-    --ppo_mini_batch_size) PPO_MINI_BATCH_SIZE="$2"; shift 2 ;;
-    --ppo_micro_batch_size) PPO_MICRO_BATCH_SIZE="$2"; shift 2 ;;
-    --kl_loss_coef) KL_LOSS_COEF="$2"; shift 2 ;;
-    --entropy_coeffient) ENTROPY_COEFFIENT="$2"; shift 2 ;;
-    --clip_ratio) CLIP_RATIO="$2"; shift 2 ;;
-    --kl_loss_type) KL_LOSS_TYPE="$2"; shift 2 ;;
-    --temperature) TEMPERATURE="$2"; shift 2 ;;
-    --log_prob_micro_batch_size) LOG_PROB_MICRO_BATCH_SIZE="$2"; shift 2 ;;
-    --rollout_n) ROLLOUT_N="$2"; shift 2 ;;
-    --rollout_gpu_memory_util) ROLLOUT_GPU_MEMORY_UTIL="$2"; shift 2 ;;
+    --train_batch_size) TRAIN_BATCH_SIZE="$2"; SUFFIX_PARTS+="_batch$2"; shift 2 ;;
+    --val_batch_size) VAL_BATCH_SIZE="$2"; SUFFIX_PARTS+="_valbatch$2"; shift 2 ;;
+    --max_prompt_length) MAX_PROMPT_LENGTH="$2"; SUFFIX_PARTS+="_max_prompt$2"; shift 2 ;;
+    --max_response_length) MAX_RESPONSE_LENGTH="$2"; SUFFIX_PARTS+="_max_response$2"; shift 2 ;;
+    --learning_rate) LEARNING_RATE="$2"; SUFFIX_PARTS+="_lr$2"; shift 2 ;;
+    --ppo_mini_batch_size) PPO_MINI_BATCH_SIZE="$2"; SUFFIX_PARTS+="_ppomini$2"; shift 2 ;;
+    --ppo_micro_batch_size) PPO_MICRO_BATCH_SIZE="$2"; shift 2 ;; # 不加入后缀
+    --kl_loss_coef) KL_LOSS_COEF="$2"; SUFFIX_PARTS+="_klcoef$2"; shift 2 ;;
+    --entropy_coefficient) ENTROPY_COEFFICIENT="$2"; SUFFIX_PARTS+="_entcoef$2"; shift 2 ;; # 修正了拼写
+    --clip_ratio) CLIP_RATIO="$2"; SUFFIX_PARTS+="_clipratio$2"; shift 2 ;;
+    --kl_loss_type) KL_LOSS_TYPE="$2"; SUFFIX_PARTS+="_kltype$2"; shift 2 ;;
+    --temperature) TEMPERATURE="$2"; SUFFIX_PARTS+="_temp$2"; shift 2 ;;
+    --log_prob_micro_batch_size) LOG_PROB_MICRO_BATCH_SIZE="$2"; SUFFIX_PARTS+="_logprobbatch$2"; shift 2 ;;
+    --rollout_n) ROLLOUT_N="$2"; SUFFIX_PARTS+="_rollout$2"; shift 2 ;;
+    --rollout_gpu_memory_util) ROLLOUT_GPU_MEMORY_UTIL="$2"; shift 2 ;; # 不加入后缀
     --rollout_tp) ROLLOUT_TENSOR_MODEL_PARALLEL_SIZE="$2"; shift 2 ;;
     --micro_rollout_batch_size) MICRO_ROLLOUT_BATCH_SIZE="$2"; shift 2 ;;
-    --kl_coef) KL_COEF="$2"; shift 2 ;;
-    --total_epochs) TOTAL_EPOCHS="$2"; shift 2 ;;
-    --dataset_name) DATASET_NAME="$2"; shift 2 ;;
+    --kl_coef) KL_COEF="$2"; SUFFIX_PARTS+="_klcontrol$2"; shift 2 ;;
+    --total_epochs) TOTAL_EPOCHS="$2"; SUFFIX_PARTS+="_epochs$2"; shift 2 ;;
+    --dataset_name) DATASET_NAME="$2"; SUFFIX_PARTS+="_$2"; shift 2 ;;
     --model_name) MODEL_NAME="$2"; shift 2 ;;
     --save_freq) SAVE_FREQ="$2"; shift 2 ;;
     --test_freq) TEST_FREQ="$2"; shift 2 ;;
-    --remove_clip) REMOVE_CLIP="$2"; shift 2 ;;
+    --remove_clip) REMOVE_CLIP="$2"; SUFFIX_PARTS+="_remove_clip$2"; shift 2 ;;
     --remove_previous_ckpt) REMOVE_PREVIOUS_CKPT="$2"; shift 2 ;;
-    --suffix) SUFFIX="$2"; shift 2 ;;
-    --logger_config) LOGGER_CONFIG="$2"; shift 2 ;;
+    --suffix) SUFFIX_PARTS+="_$2"; shift 2 ;; # 允许传入自定义后缀
+    --logger_config) LOGGER_CONFIG="$2"; shift 2 ;; # 增加了缺失的logger_config
     --exp_name) EXP_NAME="$2"; shift 2 ;;
-    --reward_ema_alpha) REWARD_EMA_ALPHA="$2"; shift 2 ;;
+    --reward_ema_alpha) REWARD_EMA_ALPHA="$2"; SUFFIX_PARTS+="_ema$2"; shift 2 ;;
     --reward_indicator_names) REWARD_INDICATOR_NAMES="$2"; shift 2 ;;
     --reward_weights) REWARD_WEIGHTS="$2"; shift 2 ;;
     --reward_weights_exploit) REWARD_WEIGHTS_EXPLOIT="$2"; shift 2 ;;
     --val_before_train) VAL_BEFORE_TRAIN="$2"; shift 2 ;;
     --val_sample_size) VAL_SAMPLE_SIZE="$2"; shift 2 ;;
-    --diff_stride) DIFF_STRIDE="$2"; shift 2 ;;
+    --diff_stride) DIFF_STRIDE="$2"; SUFFIX_PARTS+="_stride$2"; shift 2 ;;
     --enable_calculator) ENABLE_CALCULATOR="$2"; shift 2 ;;
     --add_reward) ADD_REWARD="$2"; shift 2 ;;
     --add_adv) ADD_ADV="$2"; shift 2 ;;
     --compute_log_effective_rank) COMPUTE_LOG_EFFECTIVE_RANK="$2"; shift 2 ;;
     --metric_indices) METRIC_INDICES="$2"; shift 2 ;;
-    --modulation_gain) MODULATION_GAIN="$2"; shift 2 ;;
+    --modulation_gain) MODULATION_GAIN="$2"; SUFFIX_PARTS+="_mgain$2"; shift 2 ;;
     --output_token_level_metrics) OUTPUT_TOKEN_LEVEL_METRICS="$2"; shift 2 ;;
-    --adv_estimator) ADV_ESTIMATOR="$2"; shift 2 ;;
-    --critic_model_path) CRITIC_MODEL_PATH="$2"; shift 2 ;;
-    --aux_reward_global_weight) AUX_REWARD_GLOBAL_WEIGHT="$2"; shift 2 ;;
-    --token_level_baseline_type) TOKEN_LEVEL_BASELINE_TYPE="$2"; shift 2 ;; 
+    --adv_estimator) ADV_ESTIMATOR="$2"; SUFFIX_PARTS+="_$2"; shift 2 ;;
+    --critic_model_path) CRITIC_MODEL_PATH="$2"; shift 2 ;; # critic路径不加入后缀
+    --aux_reward_global_weight) AUX_REWARD_GLOBAL_WEIGHT="$2"; SUFFIX_PARTS+="_auxgw$2"; shift 2 ;;
+    --token_level_baseline_type) TOKEN_LEVEL_BASELINE_TYPE="$2"; shift 2 ;;
     --return_hidden_states) RETURN_HIDDEN_STATES="$2"; shift 2 ;;
     --return_prefill) RETURN_PREFILL="$2"; shift 2 ;;
     --return_decode) RETURN_DECODE="$2"; shift 2 ;;
@@ -215,7 +163,7 @@ while [[ "$#" -gt 0 ]]; do
     --adv_shaping_kappa) ADV_SHAPING_KAPPA="$2"; shift 2 ;;
     --svd_rank) SVD_RANK="$2"; shift 2 ;;
     --svd_niter) SVD_NITER="$2"; shift 2 ;;
-    --zeroth_order_svd_method) ZEROTH_ORDER_SVD_METHOD="$2"; shift 2 ;; 
+    --zeroth_order_svd_method) ZEROTH_ORDER_SVD_METHOD="$2"; shift 2 ;;
     --diff_svd_method) DIFF_SVD_METHOD="$2"; shift 2 ;;
     --hypothesis_type) HYPOTHESIS_TYPE="$2"; shift 2 ;;
     --compute_global_metrics) COMPUTE_GLOBAL_METRICS="$2"; shift 2 ;;
@@ -276,13 +224,11 @@ SUFFIX=$(generate_suffix "$@")
 # Construct the FINAL_RUN_NAME in the desired order: {model}_{exp}_{base}{suffix}
 # For example: Qwen2.5-3B_origin_verl-grpo_max_response1280...
 if [[ "$ADV_ESTIMATOR" == "gae" ]]; then
-  SUFFIX+="_critic-$(basename $CRITIC_MODEL_PATH)"
+  SUFFIX_PARTS+="_critic-$(basename $CRITIC_MODEL_PATH)"
 fi
-FINAL_RUN_NAME="${MODEL_NAME}_${EXP_NAME}_${RUN_NAME}${SUFFIX}"
-
-# Update the log file path to use the new name
+FINAL_RUN_NAME="${MODEL_NAME}_${EXP_NAME}_${RUN_NAME}${SUFFIX_PARTS}"
 LOG_FILE_PATH="$HDFS_LOG_PATH/$FINAL_RUN_NAME.log"
-# The EXP_NAME variable is now part of the FINAL_RUN_NAME
+
 
 # 1. 定义本次运行的专属目录 (与 trainer.default_local_dir 一致)
 RUN_DIRECTORY="$HDFS_CHECKPOINT_PATH/$FINAL_RUN_NAME"
