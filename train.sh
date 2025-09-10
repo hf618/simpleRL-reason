@@ -79,7 +79,7 @@ export RAY_RUNTIME_ENV_JSON="{
 bash train_grpo_math_tune_ray.sh \
     --model_name qwen/Qwen2.5-1.5B --max_prompt_length 512 --max_response_length 1536 \
     --critic_model_path "/media/root1/4t/Models/deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B" --adv_estimator "gae" \
-    --exp_name "PPOorigin" --add_reward False --add_adv False \
+    --exp_name "PPOeradv" --add_reward True --add_adv True \
     --train_batch_size 48 --ppo_mini_batch_size 24 --val_batch_size 48  --rollout_n 1 \
     --ppo_micro_batch_size 1 --log_prob_micro_batch_size 12 --micro_rollout_batch_size 12 \
     --compute_global_metrics True --compute_cumulative_global_metrics True --global_diff_stride_train 5 --global_diff_stride_val 20 \
@@ -91,7 +91,10 @@ bash train_grpo_math_tune_ray.sh \
     --reward_indicator_names "['Effective Rank diff 2', 'Effective Rank diff', 'Effective Rank']" \
     --output_token_level_metrics False --compute_log_effective_rank False \
     --zeroth_order_svd_method 'full' --diff_svd_method 'full' --svd_rank 256 --svd_niter 5 \
-    --diff_stride 40 --modulation_gain 2.0 --aux_reward_global_weight 1.0 --aux_fix True --reward_ema_alpha 0.3 --adv_shaping_kappa 2.0 \
+    --diff_stride 40 --modulation_gain 2.0 --aux_reward_global_weight 0.5 --aux_fix True --reward_ema_alpha 0.3 --adv_shaping_kappa 2.0 \
     --return_hidden_states True --return_prefill False --return_decode True \
     --diff_calculator_method "optimized" 
 
+# model -> dataset_name
+# exp_name -> add_reward -> add_adv
+# critic_model_path -> adv_estimator -> rollout_n -> global_diff_stride_train

@@ -14,7 +14,7 @@ GPU_MEMORY_UTILIZATION=0.70
 # Just change the value of this variable to switch between test sets.
 # Available options: "FULL_PASS1", "SMALL_SAMPLES_PASS16", "TINY_SAMPLES_PASS256"
 
-ACTIVE_CONFIG_SET="FULL_PASS1"
+ACTIVE_CONFIG_SET="SMALL_SAMPLES_PASS16"
 TEMPERATURES=(0.6)
 MAX_RESPONSE_LENGTH=(1536)
 
@@ -212,7 +212,7 @@ do
                 --max_tokens ${max_response_length} \
                 --benchmarks "${BENCHMARKS}" \
                 --n_sampling ${current_n_sampling} \
-                --visible_gpus 0 \
+                --visible_gpus 1 \
                 --output_dir "${FINAL_OUTPUT_DIR}" \
                 --use_wandb_arg ${USE_WANDB} \
                 --calculate_metrics ${CALCULATE_METRICS} \
